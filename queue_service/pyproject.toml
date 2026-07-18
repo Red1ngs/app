@@ -1,0 +1,10 @@
+[project]
+name = "queue-service"
+version = "0.1.0"
+description = "Example scaffold for a new service sharing accounts with app via account-service"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "redis>=5.1.0",
+]

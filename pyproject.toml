@@ -1,0 +1,16 @@
+[project]
+name = "reader"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiogram>=3.28.2",
+    "bs4>=0.0.2",
+    "dotenv>=0.9.9",
+    "httpx[http2,https2]>=0.28.1",
+    "redis>=5.1.0",
+    "pytz>=2026.2",
+    "pyyaml>=6.0.3",
+    "tzdata>=2026.2",
+]
