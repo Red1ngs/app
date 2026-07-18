@@ -28,7 +28,7 @@ services:
       SITE_BASE_URL: "https://mangabuff.ru"
       LOG_LEVEL: "INFO"
     volumes:
-      - account-data:/data
+      - ../account-service/data:/data
     depends_on:
       redis:
         condition: service_healthy
@@ -58,33 +58,14 @@ services:
     env_file:
       - .env
     volumes:
-      - app-data:/app/data
-      - app-logs:/app/logs
+      - ./data:/app/data
+      - ./logs:/app/logs
       - ./app.yaml:/app/app.yaml:ro
     depends_on:
       account-service:
         condition: service_healthy
       redis:
         condition: service_healthy
-
-  # ── Приклад другого сервісу на тих самих акаунтах ────────────────────────
-  # Спільне з app — тільки акаунти (через account-service) і Redis.
-  # Перейменувати/переробити під реальний сервіс, або прибрати цей блок,
-  # якщо поки не потрібен.
-  # queue-service:
-  #   build:
-  #     context: ./queue_service
-  #   restart: unless-stopped
-  #   environment:
-  #     ACCOUNT_SERVICE_URL: "http://account-service:8100"
-  #     REDIS_URL: "redis://redis:6379/0"
-  #   volumes:
-  #     - queue-data:/data
-  #   depends_on:
-  #     account-service:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
 
   # ── Card-evaluation: оцінка обмінів/цін карт (окремий репо, ../card-evaluation) ──
   # HTTP-мікросервіс над бібліотекою card_evaluation. Репо має підпапки
@@ -96,6 +77,8 @@ services:
     build:
       context: ../card-evaluation/service
       dockerfile: service/Dockerfile
+      ssh:
+        - default
     restart: unless-stopped
     environment:
       DB_PATH: "/data/card_evaluation.db"
@@ -105,64 +88,11 @@ services:
       MB_ACCOUNT_ID: "${CE_MB_ACCOUNT_ID:-}"
       CARD_EVALUATION_SERVICE_TOKEN: "${CARD_EVALUATION_SERVICE_TOKEN:-}"
     volumes:
-      - card-evaluation-data:/data
+      - ../card-evaluation/data:/data
     depends_on:
       account-service:
         condition: service_healthy
 
-  # ── Trade-helper: тонкий API (свій, окремий від адмінського app) ─────────
-  # Окремий проєкт/репо (свій pyproject.toml, свій git), тут — той самий
-  # docker-compose, тому будується з context: ../trade-helper (checkout поруч
-  # з цим репо, сиблінг-директорія). Оцінку обмінів/цін більше не рахує сам —
-  # ходить по мережі в card-evaluation через клієнт card-evaluation-client.
-  #
-  # Якщо не хочеш тримати build context кількох репо на одному хості — заміни
-  # build: на готовий образ з реєстру: image: registry/trade-helper-api:tag
-  th-api:
-    build:
-      context: ../trade-helper
-      dockerfile: services/api/Dockerfile
-    restart: unless-stopped
-    env_file:
-      - ../trade-helper/.env
-    environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_PATH: "/data/mangabuff_cards.db"
-      CARD_EVALUATION_SERVICE_URL: "http://card-evaluation:8200"
-      CARD_EVALUATION_SERVICE_TOKEN: "${CARD_EVALUATION_SERVICE_TOKEN:-}"
-    volumes:
-      - th-data:/data
-    ports:
-      - "8001:8000"   # інший зовнішній порт, ніж 8000 в app — уникнути конфлікту
-    depends_on:
-      - redis
-      - card-evaluation
-
-  # ── Trade-helper: свій Telegram-бот (окремий від адмінського бота app) ───
-  th-telegram:
-    build:
-      context: ../trade-helper
-      dockerfile: services/telegram/Dockerfile
-    restart: unless-stopped
-    env_file:
-      - ../trade-helper/.env
-    environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_PATH: "/data/mangabuff_cards.db"
-      TG_BOT_TOKEN: "${TH_TG_BOT_TOKEN:-}"
-      CARD_EVALUATION_SERVICE_URL: "http://card-evaluation:8200"
-      CARD_EVALUATION_SERVICE_TOKEN: "${CARD_EVALUATION_SERVICE_TOKEN:-}"
-    volumes:
-      - th-data:/data
-    depends_on:
-      - redis
-      - card-evaluation
-
 volumes:
   redis-data:
-  account-data:
-  app-data:
-  app-logs:
-  queue-data:
-  th-data:
-  card-evaluation-data:
+
