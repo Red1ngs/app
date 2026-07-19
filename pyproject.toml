@@ -13,4 +13,6 @@ dependencies = [
     "pytz>=2026.2",
     "pyyaml>=6.0.3",
     "tzdata>=2026.2",
+
+    "account-service-client @ git+ssh://git@github.com/Red1ngs/account-service.git@v0.1.0#subdirectory=client"
 ]

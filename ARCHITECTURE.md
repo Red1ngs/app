@@ -3,12 +3,19 @@
 ## Структура репозиторію
 
 ```
-.
-├── docker-compose.yml       ← app + account-service + redis
+.                                 ← цей репо (app)
+├── docker-compose.yml       ← app + account-service + card-evaluation +
+│                                trade-helper (api/telegram) + redis, усі
+│                                разом, в одній мережі, спільні для всіх
 ├── Dockerfile                ← образ бізнес-застосунку (app)
 ├── .env.example
-├── main.py, pyproject.toml, src/   ← бізнес-застосунок (як і раніше)
-└── account_service/          ← НОВИЙ сервіс, окремий образ, окрема БД
+└── main.py, pyproject.toml, src/   ← бізнес-застосунок (як і раніше)
+
+../account-service/          ← ОКРЕМИЙ репо-сиблінг (не тут), окремий
+│                                образ, окрема БД. Спільний для app і
+│                                trade-helper — обидва звертаються до
+│                                ОДНОГО й того самого контейнера.
+└── service/
     ├── Dockerfile
     ├── pyproject.toml
     └── account_service/
@@ -94,9 +101,10 @@ docker compose up --build
 
 ## Кілька сервісів на одному акаунті
 
-Якщо другий сервіс (наприклад `queue_service/` — приклад-скафолд у репо)
-працює з ТИМИ САМИМИ акаунтами, що й `app`, а не своїми окремими —
-`AccountManager.request()` і `.open_dialog()` в account-service серіалізують
+Якщо другий сервіс (наприклад `card-evaluation`, коли йому задано
+`MB_ACCOUNT_ID`) працює з ТИМИ САМИМИ акаунтами, що й `app`, а не своїми
+окремими — `AccountManager.request()` і `.open_dialog()` в account-service
+серіалізують
 `use_room(...) + запит` під `asyncio.Lock` на `account_id`
 (`_room_lock_for`). Без цього два клієнти могли б перемкнути socket-room
 одне під одним посеред запиту й отримати чужу відповідь. Плата за це —

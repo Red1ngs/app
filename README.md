@@ -5,9 +5,13 @@
 не тут — це `account-service`, окремий репозиторій (сиблінг-директорія
 `../account-service/service`, свій git/pyproject/Dockerfile).
 
-Разом з ним (і опційно з `trade-helper` та `card-evaluation`) запускається
-одним `docker-compose.yml` з кореня цього репо — див. коментарі там і
-`ARCHITECTURE.md`. Очікувана структура директорій на хості:
+Разом з ним запускається одним `docker-compose.yml` з кореня цього репо —
+`account-service`, `card-evaluation` і обидва сервіси `trade-helper`
+(`api`/`telegram`) підняті тут же, в одній docker-мережі, і всі звертаються
+до ОДНОГО й того самого `account-service` та ОДНОГО й того самого
+`card-evaluation` — жоден із сервісів не створює свій окремий інстанс.
+Див. коментарі в `docker-compose.yml` і `ARCHITECTURE.md`. Очікувана
+структура директорій на хості:
 
 ```
 some-folder/
@@ -15,8 +19,11 @@ some-folder/
 ├── account-service/            ← окремий репо
 │   ├── service/                ← HTTP-сервіс (образ, який тут піднімається)
 │   └── client/                 ← account-service-client, pip-пакет для інших сервісів
-├── trade-helper/                ← окремий репо (опційно)
-└── card-evaluation/            ← окремий репо (опційно, потрібен trade-helper)
+├── trade-helper/                ← окремий репо; api/telegram піднімаються
+│                                  звідси, з ../trade-helper/docker-compose.yml
+│                                  тут НЕ використовується (він лише для
+│                                  окремого dev-запуску без app)
+└── card-evaluation/            ← окремий репо, потрібен і app, і trade-helper
     ├── service/                 ← бібліотека card_evaluation + HTTP-сервіс (образ)
     └── client/                  ← card-evaluation-client, pip-пакет для trade-helper
 ```

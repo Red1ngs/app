@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any, Awaitable, Callable, Generic, Literal, Optional, TypeVar, ParamSpec, Concatenate, cast
 
-from src.core.runtime.proxy_queue import ProxyFatalError
+from account_service_client import AccountAuthError, AccountUnavailableError
 from src.utils.logging import get_logger as log
 
 
@@ -26,7 +26,7 @@ HttpMethodStr = Literal["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]
 
 class FailReason(Enum):
     NETWORK        = auto()   # таймаут, з'єднання відхилено, будь-який виняток
-    AUTH           = auto()   # 419 після retry, PermissionError
+    AUTH           = auto()   # account-service: сесія прострочена / акаунт не підключений
     NOT_FOUND      = auto()   # 404
     SERVER         = auto()   # 5xx або неочікуваний статус
     BAD_DATA       = auto()   # 200, але тіло порожнє або не те що очікували
@@ -34,8 +34,6 @@ class FailReason(Enum):
     LIMIT_EXHAUSTED = auto()  # 403 «ліміт на сьогодні вичерпано» — не помилка,
                                # а розбіжність з реальним станом на сайті;
                                # caller фіксує лічильник (напр. hits_left=0)
-    PROXY_FATAL    = auto()   # проксі фатально непрацездатне (ProxyFatalError);
-                               # акаунт вже позначено DEAD на момент повернення
 
 
 @dataclass(frozen=True)
@@ -95,22 +93,16 @@ def http_call(
 ) -> "Callable[Concatenate[Any, P], Awaitable[HttpResult[R]]]":
     """
     Обгортає бізнес-метод BotSession:
-      - PermissionError → FailReason.AUTH
+      - AccountAuthError / AccountUnavailableError (account-service повідомив
+        про прострочену сесію чи непідключений акаунт) → FailReason.AUTH
       - будь-який інший виняток → FailReason.NETWORK
     """
     @functools.wraps(func)
     async def wrapper(self: Any, *args: P.args, **kwargs: P.kwargs) -> HttpResult[R]:
         try:
             return await func(self, *args, **kwargs)
-        except ProxyFatalError as e:
-            # BotHttpClient._handle_proxy_fatal() вже сигналізував
-            # on_proxy_fatal (Account.mark_dead) до того, як цей виняток
-            # дійшов сюди — акаунт вже DEAD. Тут лише гасимо виняток у
-            # звичний HttpResult, щоб профессії не падали з traceback.
-            log().critical(f"  → {func.__name__}: проксі фатально непрацездатне: {e.detail}")
-            return http_fail(FailReason.PROXY_FATAL)
-        except PermissionError:
-            log().error(f"  → {func.__name__}: auth error")
+        except (AccountAuthError, AccountUnavailableError) as e:
+            log().error(f"  → {func.__name__}: auth error ({e})")
             return http_fail(FailReason.AUTH)
         except Exception as e:
             log().error(f"  → {func.__name__}: {e}")

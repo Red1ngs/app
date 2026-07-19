@@ -20,7 +20,6 @@ from src.core.runtime.request_router import RequestContext, RequestRouter
 from src.core.runtime.conditions import Condition
 from src.core.runtime.profession import BaseProfession, RequestResult
 from src.core.runtime.profession_spec import profession_registry
-from src.core.runtime.proxy_queue import proxy_queue_manager
 from src.core.status import AccountStatus
 
 log = get_scheduler_logger()
@@ -264,15 +263,6 @@ class EventDrivenScheduler:
 
     async def stop(self) -> None:
         if self._async_loop and self._async_loop.is_running():
-            # Graceful shutdown proxy_queue воркерів — перед зупинкою loop
-            future = asyncio.run_coroutine_threadsafe(
-                proxy_queue_manager.shutdown_all(), self._async_loop
-            )
-            try:
-                future.result(timeout=15.0)
-            except Exception as e:
-                log.warning(f"proxy_queue shutdown error: {e}")
-
             # Оскільки BotSession та підключення сокетів ініціалізуються на домашньому (головному) loop,
             # закривати їх потрібно саме в ньому, а не в фоновому self._async_loop.
             with self._lock:

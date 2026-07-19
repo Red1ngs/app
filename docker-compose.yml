@@ -16,6 +16,13 @@ services:
   # accounts + sessions, жодних бізнес-таблиць). Спільний для app і trade-helper.
   # Репо має підпапки service/ (цей образ) і client/ (account-service-client,
   # окремий pip-пакет — сюди не потрібен, збирається лише HTTP-сервіс).
+  #
+  # УВАГА: /accounts/{id}/request виконує довільний HTTP-запит через живу
+  # сесію акаунта — тому ендпоінти (крім /health) захищені спільним
+  # Bearer-токеном ACCOUNT_SERVICE_TOKEN (той самий патерн, що й
+  # CARD_EVALUATION_SERVICE_TOKEN нижче). Порожній токен = авторизація
+  # вимкнена — підходить лише для локальної розробки, ЗАДАЙ токен у .env
+  # перед будь-яким запуском на хості з відкритим назовні мережевим доступом.
   account-service:
     build:
       context: ../account-service/service
@@ -27,6 +34,7 @@ services:
       REDIS_URL: "redis://redis:6379/0"
       SITE_BASE_URL: "https://mangabuff.ru"
       LOG_LEVEL: "INFO"
+      ACCOUNT_SERVICE_TOKEN: "${ACCOUNT_SERVICE_TOKEN:-}"
     volumes:
       - ../account-service/data:/data
     depends_on:
@@ -37,12 +45,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    ports:
-      # Відкрито назовні лише для дебагу/адмінських запитів руками.
-      # Іншим проєктам (напр. trade-helper) не потрібен цей порт, якщо
-      # вони під'єднані як сервіси нижче — резолвлять "account-service"
-      # нативно, через спільну docker-мережу цього ж compose-файла.
-      - "8100:8100"
+    # Порт НЕ прокинутий назовні за замовчуванням — інші сервіси нижче
+    # резолвлять "account-service" нативно, через спільну docker-мережу
+    # цього ж compose-файла, їм публічний порт не потрібен. Якщо треба
+    # подебажити руками з хоста — розкоментуй на час дебагу і обов'язково
+    # задай ACCOUNT_SERVICE_TOKEN вище, інакше /accounts/{id}/request
+    # дає будь-кому в мережі проксі-доступ до сесій акаунтів.
+    # ports:
+    #   - "8100:8100"
 
   # ── Бізнес-застосунок ─────────────────────────────────────────────────────
   # Scheduler, professions (mining/quiz/daily/reader/...), admin Telegram bot.
@@ -53,6 +63,7 @@ services:
     restart: unless-stopped
     environment:
       ACCOUNT_SERVICE_URL: "http://account-service:8100"
+      ACCOUNT_SERVICE_TOKEN: "${ACCOUNT_SERVICE_TOKEN:-}"
       REDIS_URL: "redis://redis:6379/0"
       TZ: "Europe/Kiev"
     env_file:
@@ -67,32 +78,6 @@ services:
       redis:
         condition: service_healthy
 
-  # ── Card-evaluation: оцінка обмінів/цін карт (окремий репо, ../card-evaluation) ──
-  # HTTP-мікросервіс над бібліотекою card_evaluation. Репо має підпапки
-  # service/ (бібліотека + цей HTTP-шар, зібраний двоступенево — див. його
-  # Dockerfile) і client/ (card-evaluation-client, окремий pip-пакет, який
-  # використовує trade-helper — сюди для образу не потрібен).
-  # Потребує account-service лише опційно (анонімний фолбек без нього).
-  card-evaluation:
-    build:
-      context: ../card-evaluation/service
-      dockerfile: service/Dockerfile
-      ssh:
-        - default
-    restart: unless-stopped
-    environment:
-      DB_PATH: "/data/card_evaluation.db"
-      MB_BASE: "https://mangabuff.ru"
-      CATALOG_UPDATE_HOURS: "${CE_CATALOG_UPDATE_HOURS:-6}"
-      ACCOUNT_SERVICE_URL: "http://account-service:8100"
-      MB_ACCOUNT_ID: "${CE_MB_ACCOUNT_ID:-}"
-      CARD_EVALUATION_SERVICE_TOKEN: "${CARD_EVALUATION_SERVICE_TOKEN:-}"
-    volumes:
-      - ../card-evaluation/data:/data
-    depends_on:
-      account-service:
-        condition: service_healthy
-
+  
 volumes:
   redis-data:
-
