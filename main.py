@@ -6,6 +6,7 @@ main.py — точка входу.
 щоб уникнути паралельного флуду login-запитів і помилки "Сесія не встановлена".
 """
 import asyncio
+import os
 from pathlib import Path
 
 # ── Завантаження .env ─────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ from src.core.core_account import Account
 from src.core.runtime.scheduler import EventDrivenScheduler
 
 # ── Services ──────────────────────────────────────────────────────────────────
-from src.bot.services.scheduler_service import SchedulerService
+from src.core.services.scheduler_service import SchedulerService
 from src.database.repository.account import AccountRepository
 from src.core.runtime.startup_manager import StartupManager, StartupConfig
 
@@ -87,9 +88,16 @@ async def restore_accounts(
         )
 
 
-# ── Admin Telegram Bot + main loop ────────────────────────────────────────────
-from src.bot.admin.config import AdminBotConfig
-from src.bot.admin.runner import AdminBotRunner
+# ── RPC-сервер + main loop ────────────────────────────────────────────────────
+# Адмінський Telegram-бот більше НЕ тут — він винесений у власний сервіс
+# `telegram-service` (сиблінг-директорія `../telegram_service`), який
+# звертається сюди виключно через generic HTTP RPC (`src/core/rpc/server.py`).
+# Цей процес лишається "безголовим": жодного знання про Telegram/aiogram.
+import uvicorn
+from src.core.rpc.server import create_rpc_app
+
+RPC_HOST = os.environ.get("CORE_SERVICE_HOST", "0.0.0.0")
+RPC_PORT = int(os.environ.get("CORE_SERVICE_PORT", "8200"))
 
 
 async def main() -> None:
@@ -101,25 +109,32 @@ async def main() -> None:
     from src.core.account_events import account_event_bus
     await account_event_bus.start()
 
+    # Слухач "новий день настав" з day-service (Redis) — так само має
+    # стартувати ДО відновлення акаунтів, бо DayAnnouncerService
+    # підписується вже в bind() (той самий момент, що SocketService вище).
+    from src.core.day_events import day_event_bus
+    await day_event_bus.start()
+
     scheduler = await EventDrivenScheduler.initialize(on_dead=on_dead)
     log.info("Scheduler initialized (empty)")
 
     scheduler.start()
     
     startup_cfg = StartupConfig.from_app_config(app_cfg)
-    admin_bot = None
+    svc = SchedulerService(repositories, app_cfg)
 
-    try:
-        admin_cfg = AdminBotConfig.from_env()
-        svc = SchedulerService(repositories, app_cfg)
+    await restore_accounts(svc, startup_cfg, repositories.accounts)
 
-        await restore_accounts(svc, startup_cfg, repositories.accounts)
-
-        admin_bot = AdminBotRunner(admin_cfg, svc)
-        admin_bot.start()
-        log.info("AdminBot started — додавай акаунти через /accounts")
-    except RuntimeError as e:
-        log.error(f"AdminBot не запущено: {e}")
+    # RPC-сервер — єдина точка входу ззовні (замінює колишній in-process
+    # admin-bot thread). telegram-service — типовий, але не єдиний можливий
+    # клієнт: будь-який інший сервіс так само може ходити сюди по HTTP.
+    rpc_app = create_rpc_app(svc)
+    uv_config = uvicorn.Config(
+        rpc_app, host=RPC_HOST, port=RPC_PORT, log_level="warning", lifespan="off",
+    )
+    uv_server = uvicorn.Server(uv_config)
+    rpc_task = asyncio.create_task(uv_server.serve(), name="core-rpc")
+    log.info(f"RPC server listening on {RPC_HOST}:{RPC_PORT}")
 
     try:
         while True:
@@ -131,13 +146,19 @@ async def main() -> None:
             await asyncio.wait_for(scheduler.stop(), timeout=20.0)
         except asyncio.TimeoutError:
             log.warning("Shutdown timed out, forcing exit")
-        
-        if admin_bot:
-            admin_bot.stop()
+
+        uv_server.should_exit = True
+        try:
+            await asyncio.wait_for(rpc_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            rpc_task.cancel()
 
         from src.core.account_client import account_client
+        from src.core.day_client import day_client
         await account_event_bus.stop()
+        await day_event_bus.stop()
         await account_client.aclose()
+        await day_client.aclose()
         log.info("Shutdown complete")
 
 

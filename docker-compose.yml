@@ -9,20 +9,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-  # ── Акаунт-сервіс ─────────────────────────────────────────────────────────
-  # Окремий репо (../account-service, сиблінг-директорія) — повний облік
-  # акаунтів: реєстрація, HTTP-сесія, авторизація, socket. Власна БД (тільки
-  # accounts + sessions, жодних бізнес-таблиць). Спільний для app і trade-helper.
-  # Репо має підпапки service/ (цей образ) і client/ (account-service-client,
-  # окремий pip-пакет — сюди не потрібен, збирається лише HTTP-сервіс).
-  #
-  # УВАГА: /accounts/{id}/request виконує довільний HTTP-запит через живу
-  # сесію акаунта — тому ендпоінти (крім /health) захищені спільним
-  # Bearer-токеном ACCOUNT_SERVICE_TOKEN (той самий патерн, що й
-  # CARD_EVALUATION_SERVICE_TOKEN нижче). Порожній токен = авторизація
-  # вимкнена — підходить лише для локальної розробки, ЗАДАЙ токен у .env
-  # перед будь-яким запуском на хості з відкритим назовні мережевим доступом.
+      
   account-service:
     build:
       context: ../account-service/service
@@ -54,18 +41,53 @@ services:
     # ports:
     #   - "8100:8100"
 
-  # ── Бізнес-застосунок ─────────────────────────────────────────────────────
-  # Scheduler, professions (mining/quiz/daily/reader/...), admin Telegram bot.
-  # Жодного HTTP/cookies/socket до сайту напряму — усе через account-service.
-  app:
+  # ── День-сервіс ───────────────────────────────────────────────────────────
+  # Єдина відповідальність: для кожного зареєстрованого акаунта визначити
+  # момент "настав новий день" (з індивідуальним зсувом по часу для акаунта)
+  # і один раз про це оповістити через Redis. Нічого не знає про daily-бонус/
+  # mining/quiz — це логіка бізнес-застосунку (DailyMonitor). Без HTTP-сервера
+  # (сервіс 99.9% часу спить) — уся взаємодія через Redis: список команд на
+  # вхід, pub/sub на вихід. Власна SQLite (accounts + day_runs), щоб не
+  # дублювати оповіщення при рестарті. Деталі — day_service/README.md.
+  day-service:
+    build:
+      context: ./day_service
+    restart: unless-stopped
+    # Без HTTP-сервера — сервіс не слухає жодного порту. Healthcheck
+    # (heartbeat-файл) заданий у Dockerfile сервісу.
+    environment:
+      DAY_SERVICE_DB_PATH: "/data/day_service.db"
+      REDIS_URL: "redis://redis:6379/0"
+      TZ: "Europe/Kiev"
+      LOG_LEVEL: "INFO"
+    volumes:
+      - ./day-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── Бізнес-ядро (core-service, колишній "app") ────────────────────────────
+  # Scheduler, professions (mining/quiz/daily/reader/...). Жодного
+  # HTTP/cookies/socket до сайту напряму — усе через account-service.
+  # Жодного Telegram/aiogram тут більше немає — адмін-бот винесений у
+  # власний контейнер `telegram-service` (сиблінг-директорія
+  # `./telegram_service`), що звертається сюди виключно по HTTP RPC
+  # (`POST /rpc/{method}`, `src/core/rpc/server.py`).
+  core-service:
     build:
       context: .
+      ssh:
+        - default
     restart: unless-stopped
     environment:
+      PYTHONPATH: /app
       ACCOUNT_SERVICE_URL: "http://account-service:8100"
       ACCOUNT_SERVICE_TOKEN: "${ACCOUNT_SERVICE_TOKEN:-}"
       REDIS_URL: "redis://redis:6379/0"
       TZ: "Europe/Kiev"
+      CORE_SERVICE_HOST: "0.0.0.0"
+      CORE_SERVICE_PORT: "8200"
+      CORE_SERVICE_TOKEN: "${CORE_SERVICE_TOKEN:-}"
     env_file:
       - .env
     volumes:
@@ -75,9 +97,41 @@ services:
     depends_on:
       account-service:
         condition: service_healthy
+      day-service:
+        condition: service_healthy
       redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8200/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Порт RPC НЕ прокинутий назовні за замовчуванням — той самий принцип,
+    # що й у account-service вище: telegram-service резолвить
+    # "core-service" нативно через docker-мережу. Розкоментуй лише для
+    # ручного дебагу і обов'язково задай CORE_SERVICE_TOKEN, інакше
+    # /rpc/{method} дає будь-кому в мережі повний доступ до бізнес-логіки.
+    # ports:
+    #   - "8200:8200"
+
+  # ── Адмінський Telegram-бот (окремий сервіс) ──────────────────────────────
+  # Жодної бізнес-логіки, жодного доступу до БД/логів на диску — лише
+  # Telegram UI-шар, що ходить у core-service по HTTP RPC. Див.
+  # telegram_service/README.md.
+  telegram-service:
+    build:
+      context: ./telegram_service
+    restart: unless-stopped
+    environment:
+      ADMIN_BOT_TOKEN: "${ADMIN_BOT_TOKEN:?ADMIN_BOT_TOKEN не задано}"
+      ADMIN_IDS: "${ADMIN_IDS:?ADMIN_IDS не задано}"
+      CORE_SERVICE_URL: "http://core-service:8200"
+      CORE_SERVICE_TOKEN: "${CORE_SERVICE_TOKEN:-}"
+    depends_on:
+      core-service:
         condition: service_healthy
 
   
 volumes:
   redis-data:
+  day-data:

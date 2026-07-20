@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.bot.services.scheduler_service import SchedulerService
+    from src.core.services.scheduler_service import SchedulerService
 
 log = logging.getLogger("src.runtime.startup_manager")
 

@@ -1,9 +1,13 @@
-# reader (app)
+# core-service (колишній "app")
 
-Бізнес-застосунок (scheduler, professions: mining/quiz/daily/reader/...,
-адмінський Telegram-бот). HTTP/auth/cookies/socket для акаунтів більше
-не тут — це `account-service`, окремий репозиторій (сиблінг-директорія
-`../account-service/service`, свій git/pyproject/Dockerfile).
+Бізнес-ядро (scheduler, professions: mining/quiz/daily/reader/...).
+HTTP/auth/cookies/socket для акаунтів тут немає — це `account-service`,
+окремий репозиторій (сиблінг-директорія `../account-service/service`,
+свій git/pyproject/Dockerfile). Адмінського Telegram-бота теж немає —
+він виїхав у власний контейнер `telegram_service/` (сиблінг-директорія
+в корені ЦЬОГО репо, не окремий git-репозиторій), що звертається сюди
+виключно по HTTP RPC (`src/core/rpc/server.py`, деталі —
+`telegram_service/README.md` і `ARCHITECTURE.md`).
 
 Разом з ним запускається одним `docker-compose.yml` з кореня цього репо —
 `account-service`, `card-evaluation` і обидва сервіси `trade-helper`
@@ -15,15 +19,17 @@
 
 ```
 some-folder/
-├── app/                        ← цей репозиторій
+├── app/                        ← цей репозиторій (core-service + main.py + src/)
+│   └── telegram_service/       ← сиблінг-директорія В ЦЬОМУ репо (не окремий git) —
+│                                  окремий образ/pyproject/Dockerfile, Telegram UI-шар
 ├── account-service/            ← окремий репо
 │   ├── service/                ← HTTP-сервіс (образ, який тут піднімається)
 │   └── client/                 ← account-service-client, pip-пакет для інших сервісів
 ├── trade-helper/                ← окремий репо; api/telegram піднімаються
 │                                  звідси, з ../trade-helper/docker-compose.yml
 │                                  тут НЕ використовується (він лише для
-│                                  окремого dev-запуску без app)
-└── card-evaluation/            ← окремий репо, потрібен і app, і trade-helper
+│                                  окремого dev-запуску без core-service)
+└── card-evaluation/            ← окремий репо, потрібен і core-service, і trade-helper
     ├── service/                 ← бібліотека card_evaluation + HTTP-сервіс (образ)
     └── client/                  ← card-evaluation-client, pip-пакет для trade-helper
 ```

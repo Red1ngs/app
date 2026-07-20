@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from src.bot.services.scheduler_service import SchedulerService
+from src.core.services.scheduler_service import SchedulerService
 
 
 class _DummyStatus:

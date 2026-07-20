@@ -68,11 +68,22 @@ class MiningMonitor(LoopingMonitor):
         
         scheduler.subscribe("daily.claimed", self._on_daily_claimed)
         scheduler.subscribe("mining.mining_complete", self._on_mining_complete)
-        
-        self.log.info("[MiningMonitor] Ініціалізація, початок")
-        await self._start_mining()
-        
-        await self._schedule_next()  # Запускаємо цикл після підписки на події
+
+        # Гарантуємо порядок "спочатку денний бонус, потім інші процеси":
+        # якщо на акаунті підключено профессію "daily" і бонус за сьогодні
+        # ще не зібрано — НЕ стартуємо шахту одразу, а чекаємо подію
+        # "daily.claimed" (підписку вище) — саме вона й викличе
+        # _start_mining(). Якщо ж бонус уже зібрано (або "daily" на
+        # акаунті взагалі немає) — стартуємо без затримки, як і раніше.
+        if self._daily_bonus_ready():
+            self.log.info("[MiningMonitor] Ініціалізація, початок")
+            await self._start_mining()
+            await self._schedule_next()  # Запускаємо цикл після підписки на події
+        else:
+            self.log.info(
+                "[MiningMonitor] Денний бонус ще не зібрано → відкладаємо старт шахти "
+                "до daily.claimed"
+            )
 
     async def detach(self, scheduler: "EventDrivenScheduler", account_id: str) -> None:
         self._stop_loop()
@@ -101,19 +112,29 @@ class MiningMonitor(LoopingMonitor):
 
     # ── Daily guard ───────────────────────────────────────────────────────────
 
-    def _waiting_for_daily(self) -> bool:
+    def _daily_bonus_ready(self) -> bool:
+        """
+        True — можна (далі) працювати з шахтою: або на акаунті взагалі
+        немає профессії "daily" (нема на що чекати), або денний бонус на
+        сьогодні вже зібрано.
+        False — на акаунті є "daily", але бонус за сьогодні ще не
+        зібрано → чекаємо подію "daily.claimed" (див. _on_daily_claimed).
+
+        (Раніше метод називався _waiting_for_daily і мав протилежну за
+        змістом назву при тій самій поведінці для випадку "daily
+        зібрано", але помилково повертав False для акаунтів БЕЗ
+        профессії "daily" — через що _send_ask() і виклик у attach()
+        блокували шахту назавжди на таких акаунтах. Тепер обидва місця
+        викликають саме цей метод з правильною семантикою.)
+        """
         scheduler = self.scheduler
         bot       = self.bot
 
         if not scheduler.has_profession(self._account_id, "daily"):
-            return False
-        
+            return True
+
         daily = bot.inventory.daily
-        assert daily.last_daily_claimed is not None
-        
-        # Перевіряємо, чи настав новий день відносно останнього збору щоденного бонусу.
-        result = is_today(daily.last_daily_claimed)
-        return result
+        return is_today(daily.last_daily_claimed)
         
 
     # ── Ask ───────────────────────────────────────────────────────────────────
@@ -307,8 +328,8 @@ class MiningMonitor(LoopingMonitor):
 
         await self._sale_ore()
         
-        if not self._waiting_for_daily():
-            log.info("[MiningMonitor] очікуємо збору календарного бонусу (daily.claimed)")
+        if not self._daily_bonus_ready():
+            log.info("[MiningMonitor] очікуємо збору денного бонусу (daily.claimed)")
             return
         
         if await self._mining_complete():

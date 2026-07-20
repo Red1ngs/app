@@ -9,3 +9,10 @@ logs/
 data/
 .env
 .git/
+.gitignore
+tests/
+day_service/
+telegram_service/
+ADMIN_GUIDE.md
+ARCHITECTURE.md
+app.yaml

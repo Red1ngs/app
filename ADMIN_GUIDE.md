@@ -25,7 +25,6 @@ docker compose restart account-service
 
 # Ребілд після зміни коду
 docker compose up -d --build app
-docker compose up -d --build queue-service
 docker compose up -d --build account-service
 
 docker compose up -d  # перезапуск усього

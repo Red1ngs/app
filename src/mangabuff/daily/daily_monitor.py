@@ -3,21 +3,27 @@ daily/daily_monitor.py — DailyMonitor.
 
 Архітектурні зміни:
     - Повністю видалено Pipeline, Step, Priority, triggers та BotWorker.
-    - DailyMonitor тепер керує не лише розкладом, а й усіма рішеннями:
-      яку дію викликати, як оновлювати inventory, коли емітити події.
+    - Розклад "коли настав новий день" переїхав у окремий сервіс
+      (day-service, див. /day_service — без HTTP, лише Redis). DailyMonitor
+      більше НЕ рахує сам собі, о котрій годині завтра прокинутись (жодного
+      BASE_TIME/hash-jitter тут більше немає) — він лише:
+        - чекає подію "daily.new_day" (прийшла з day-service через
+          DayAnnouncerService.bind() → src/core/day_announcer_service.py)
+          і за нею намагається зібрати бонус;
+        - при невдачі сам себе перепланує через короткий retry-cooldown,
+          поки не вийде;
+        - як і раніше реагує на force_claim/account.unbanned.
     - DailyProfession лишається тонким виконавцем окремих HTTP-кроків
       (fetch_streak / claim_daily / claim_calendar) без побічних ефектів.
 """
 from __future__ import annotations
 
-from datetime import datetime
-import hashlib
 from logging import Logger
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.core.monitoring.looping_monitor import LoopingMonitor
 from src.mangabuff.daily.inventory import DailyInventory
-from src.utils.time import _parse_hh_mm, is_equal, is_today, now, seconds_until_tomorrow_time_stable
+from src.utils.time import is_today
 
 if TYPE_CHECKING:
     from src.core.core_account import Account
@@ -25,20 +31,26 @@ if TYPE_CHECKING:
 
 from src.core.logging.loggers import get_account_logger
 
+# Скільки чекати перед повторною спробою, якщо попередня закінчилась
+# невдало (мережева помилка, сервер відхилив запит тощо). day-service
+# оповіщає лише РАЗ на день — цей retry-цикл існує саме для того, щоб
+# тимчасова невдача не чекала аж до наступного "нового дня".
+_RETRY_COOLDOWN_S = 300.0
+
 
 class DailyMonitor(LoopingMonitor):
     """
-    Монітор, який визначає КОЛИ і ЩО робити для збору щоденних бонусів.
+    Монітор, який визначає ЩО робити для збору щоденних бонусів, коли
+    day-service повідомив, що настав новий день (або коли прийшов
+    force_claim/account.unbanned).
 
     Відповідальності розділені по методах (кожен метод — одна дія):
-        - планування часу пробудження (_schedule_next / _calculate_delay)
         - визначення, що саме потрібно зробити (_determine_needs)
           (_apply_streak_result / _apply_daily_result / _apply_calendar_result)
         - оркестрація одного циклу збору (_run_claim_cycle)
-        - реакція на зовнішні сигнали (_on_force_claim / _on_account_unbanned)
+        - реакція на зовнішні сигнали
+          (_on_new_day / _on_force_claim / _on_account_unbanned)
     """
-
-    BASE_TIME = "04:30"
 
     @property
     def monitor_id(self) -> str:
@@ -58,9 +70,15 @@ class DailyMonitor(LoopingMonitor):
         self.account_id  = account_id
         self.scheduler   = scheduler
 
+        scheduler.subscribe("daily.new_day",     self._on_new_day)
         scheduler.subscribe("daily.force_claim", self._on_force_claim)
-        scheduler.subscribe("account.unbanned", self._on_account_unbanned)
+        scheduler.subscribe("account.unbanned",  self._on_account_unbanned)
 
+        # Catch-up при attach(): якщо на сьогодні бонус ще не зібрано
+        # (свіжий акаунт, або day-service вже надсилав "новий день" поки
+        # цей акаунт/бот був офлайн) — не чекати наступної події, а
+        # спробувати одразу. Якщо все вже зібрано — цикл просто нічого
+        # не зробить і засне (_interval() поверне -1).
         await self._schedule_next(delay=0.0)
 
     async def detach(
@@ -73,100 +91,16 @@ class DailyMonitor(LoopingMonitor):
 
     # ── Планування пробудження ───────────────────────────────────────────────
     #
-    # Власне планування (delay/скасування/try-except) винесено у
-    # LoopingMonitor. Тут лишається тільки те, що специфічне для daily:
-    # звідки брати затримку, коли її не передано явно, і що саме робити
-    # прокинувшись.
+    # DailyMonitor більше не рахує "коли завтра" — за це відповідає
+    # day-service. Єдине, що лишається планувати самому — короткий retry
+    # після невдалої спроби. Якщо попередня спроба була успішною (або
+    # нічого робити не було), цикл засинає до наступної події.
 
     async def _run_cycle(self) -> None:
         await self._run_claim_cycle()
 
     async def _interval(self) -> float:
-        return self._calculate_delay()
-
-    def _get_scheduled_time_str(self, base: str, account_id: str, jitter_minutes: int) -> str:
-        """
-        Розраховує точний стабільний час запуску (HH:MM) для акаунта 
-        з урахуванням симетричного зсуву (jitter).
-        """
-        h, m = _parse_hh_mm(base)
-        hash_val = int(hashlib.md5(account_id.encode()).hexdigest(), 16)
-        max_range = jitter_minutes * 2
-        jitter_offset_minutes = (hash_val % (max_range + 1)) - jitter_minutes
-        
-        total_minutes = (h * 60 + m + jitter_offset_minutes) % 1440
-        new_h, new_m = divmod(total_minutes, 60)
-        return f"{new_h:02d}:{new_m:02d}"
-
-    def _calculate_delay(self) -> float:
-        log = self.log
-        try: 
-            bot = self.bot
-
-            inv = bot.inventory.daily
-
-            # Єдине джерело істини — те саме, що використовує _run_claim_cycle.
-            # can_claim_daily / can_claim_calendar означають інше (чи відомий стан
-            # для виконання claim), а не "чи вже зроблено сьогодні" — використання
-            # їх тут раніше давало all_done=False навіть коли все реально зібрано.
-            needs_daily, needs_calendar = self._determine_needs(
-                inv.last_daily_claimed, inv.last_calendar_claimed
-            )
-            all_done = not needs_daily and not needs_calendar
-
-            delay_to_next_day, scheduled_time = self._delay_until_tomorrow(self.BASE_TIME, self._account_id, 180)
-            target_time = self._target_time_today(scheduled_time)
-
-            if all_done:
-                return delay_to_next_day
-            
-            if is_today(target_time):
-                return self._delay_when_time_passed(scheduled_time)
-            
-            # Якщо бонуси сьогодні ще не зібрані, але запланований час ще не настав:
-            # вираховуємо затримку безпосередньо до сьогоднішнього запланованого часу.
-            delay_until_today_target = (target_time - now()).total_seconds()
-            return max(0.0, delay_until_today_target)     
-        except ValueError as ex:
-            log.error(ex)
-            if str(ex) == "Account не доступний":
-                self._last_attempt_failed = True
-                return 300.0
-
-    def _target_time_today(self, scheduled_time: str) -> datetime:
-        # 1. Беремо поточний час із налаштованою часовою зоною вашого проекту
-        n = now()
-        # 2. Використовуємо нову безпечну функцію розбору з нашого модуля
-        h, m = _parse_hh_mm(scheduled_time)
-        
-        # 3. Повертаємо об'єкт із заміненим часом
-        return n.replace(hour=h, minute=m, second=0, microsecond=0)
-
-    def _delay_until_tomorrow(self, base: str, account_id: str, jitter_minutes: int) -> tuple[float, str]:
-        delay = seconds_until_tomorrow_time_stable(base, account_id, jitter_minutes)
-        # Отримуємо стабільний час доби замість тривалості (duration)
-        scheduled_time = self._get_scheduled_time_str(base, account_id, jitter_minutes)
-        
-        get_account_logger(self._account_id).info(
-            f"[DailyMonitor] Обидва бонуси на сьогодні вже зібрано. "
-            f"Наступний запуск заплановано на завтра о {scheduled_time} UTC (через {int(delay)}с)"
-        )
-        return max(0.0, delay), scheduled_time
-
-    def _delay_when_time_passed(self, scheduled_time: str) -> float:
-        log = get_account_logger(self._account_id)
-        if self._last_attempt_failed:
-            cooldown = 300.0
-            log.warning(
-                f"[DailyMonitor] Попередня спроба збору завершилась невдало. "
-                f"Наступна спроба відкладена на {int(cooldown)}с (cooldown)"
-            )
-            return cooldown
-
-        log.info(
-            f"[DailyMonitor] Настав час збору бонусів ({scheduled_time} UTC) — запуск негайно"
-        )
-        return 0.0
+        return _RETRY_COOLDOWN_S if self._last_attempt_failed else -1.0
 
     # ── Визначення потреб ────────────────────────────────────────────────────
 
@@ -199,6 +133,7 @@ class DailyMonitor(LoopingMonitor):
                 return
 
             failed = False
+            daily_just_claimed = False
 
             if needs_calendar:
                 # _ensure_streak_known лише встановлює inv.can_claim_calendar / inv.day
@@ -210,7 +145,9 @@ class DailyMonitor(LoopingMonitor):
                 failed |= await self._ensure_streak_known(log, inv)
 
             if needs_daily:
-                failed |= await self._claim_daily(log, inv, to_day)
+                daily_claim_failed = await self._claim_daily(log, inv, to_day)
+                failed |= daily_claim_failed
+                daily_just_claimed = not daily_claim_failed
 
             if needs_calendar and inv.can_claim_calendar:
                 failed |= await self._claim_calendar(log, bot, inv, to_day)
@@ -227,6 +164,15 @@ class DailyMonitor(LoopingMonitor):
                 await self._persist_inventory(bot)
             except Exception as exc:
                 log.warning(f"[DailyMonitor] Не вдалося зберегти inventory після циклу: {exc}")
+
+            if daily_just_claimed:
+                # Саме тут (а не раніше) звичайний бонус реально щойно
+                # зібрано на СЬОГОДНІ — це той момент, коли для акаунта
+                # можна дозволити стартувати решту процесів (mining/quiz/
+                # reading вже підписані на "daily.claimed" і чекають саме
+                # на нього — вони ж навмисно НЕ стартують свій перший цикл,
+                # поки не побачать last_daily_claimed == сьогодні).
+                await self._emit_all_claimed(bot, inv)
 
             await self._schedule_next()
         except ValueError as ex:
@@ -367,6 +313,25 @@ class DailyMonitor(LoopingMonitor):
             {"account_id": bot.account_id, "day": day},
             source=bot.account_id,
         )
+
+    # ── Реакція на day-service ────────────────────────────────────────────────
+
+    async def _on_new_day(self, payload: dict[str, Any]) -> None:
+        """
+        day-service (окремий сервіс, через DayAnnouncerService) оповістив,
+        що для цього акаунта настав новий день. Тут НЕ довіряємо сліпо:
+        needs_daily/needs_calendar у _run_claim_cycle все одно самостійно
+        звіряються з тим, що реально вже зібрано (last_daily_claimed/
+        last_calendar_claimed) — тому повторна чи запізніла подія
+        нешкідлива, просто нічого не зробить.
+        """
+        if payload.get("account_id") != self._account_id:
+            return
+        get_account_logger(self._account_id).info(
+            f"[DailyMonitor] day-service: новий день ({payload.get('day')}) → спроба збору бонусів"
+        )
+        self._last_attempt_failed = False
+        await self._schedule_next(delay=0.0)
 
     # ── Force claim ───────────────────────────────────────────────────────────
 

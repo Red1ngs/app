@@ -38,6 +38,7 @@ from src.mangabuff.mining.mining import MiningProfession
 
 # CoreService
 from src.mangabuff.personal.auth_service import AuthService
+from src.core.day_announcer_service import DayAnnouncerService
 
 # Монітори
 from src.mangabuff.reader.reading_monitor import ReadingMonitor
@@ -102,8 +103,12 @@ def register_core_services() -> None:
     """
     Реєструє інфраструктурні сервіси що автоматично прив'язуються до кожного акаунта.
     AuthService — завжди активний, не потребує вибору адміном.
+    DayAnnouncerService — так само: реєструє акаунт у day-service (окремий
+    сервіс, що ТІЛЬКИ оголошує настання нового дня, без бізнес-логіки) і
+    перекидає його подію в "daily.new_day", на яку підписаний DailyMonitor.
     """
     profession_registry.add_core_service(AuthService)
+    profession_registry.add_core_service(DayAnnouncerService)
 
 
 def register_monitors() -> None:

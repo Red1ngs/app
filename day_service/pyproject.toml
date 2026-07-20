@@ -1,0 +1,12 @@
+[project]
+name = "day-service"
+version = "0.2.0"
+description = "Standalone service responsible ONLY for detecting 'a new day has started' per account and announcing it over Redis. No HTTP server, no web framework — a single asyncio process talking to Redis (command list in, pub/sub events out) and a tiny SQLite journal."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "redis>=5.1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["day_service*"]
