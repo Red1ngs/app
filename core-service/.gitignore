@@ -1,0 +1,12 @@
+data/
+logs/
+*.env
+*.db
+*.zip
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv
+env/
+venv/
