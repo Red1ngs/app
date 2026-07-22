@@ -3,7 +3,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
-      - redis-data:/data
+      - ../data/redis:/data 
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -23,7 +23,7 @@ services:
       LOG_LEVEL: "INFO"
       ACCOUNT_SERVICE_TOKEN: "${ACCOUNT_SERVICE_TOKEN:-}"
     volumes:
-      - ../account-service/data:/data
+      - ../data/account:/data
     depends_on:
       redis:
         condition: service_healthy
@@ -61,7 +61,7 @@ services:
       TZ: "Europe/Kiev"
       LOG_LEVEL: "INFO"
     volumes:
-      - ./day-data:/data
+      - ../data/day:/data
     depends_on:
       redis:
         condition: service_healthy
@@ -75,7 +75,7 @@ services:
   # (`POST /rpc/{method}`, `src/core/rpc/server.py`).
   core-service:
     build:
-      context: .
+      context: ./core-service
       ssh:
         - default
     restart: unless-stopped
@@ -91,9 +91,9 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./app.yaml:/app/app.yaml:ro
+      - ../data/core:/app/data
+      - ../data/logs:/app/logs
+      - ./core-service/app.yaml:/app/app.yaml:ro
     depends_on:
       account-service:
         condition: service_healthy
@@ -130,8 +130,3 @@ services:
     depends_on:
       core-service:
         condition: service_healthy
-
-  
-volumes:
-  redis-data:
-  day-data:
