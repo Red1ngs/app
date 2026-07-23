@@ -33,7 +33,7 @@ reader:
 
   reading_modes:
     standard:
-      slots:               ["candy"]
+      slots:               ["card", "scroll"]
       fallback_interval_s: 5400
 
     event:

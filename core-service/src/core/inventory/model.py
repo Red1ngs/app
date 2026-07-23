@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from src.mangabuff.daily.inventory import DailyInventory
     from src.mangabuff.quiz.inventory import QuizInventory
     from src.mangabuff.mining.inventory import MiningInventory
-    from src.mangabuff.manga_load.inventory import CatalogLoaderInventory
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,7 +59,6 @@ class DynamicInventories:
         daily:    "DailyInventory"
         quiz:     "QuizInventory"
         mining:     "MiningInventory"
-        catalog_loader: "CatalogLoaderInventory"
 
     def __repr__(self) -> str:
         parts = " ".join(

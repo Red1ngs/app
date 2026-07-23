@@ -13,9 +13,10 @@ if TYPE_CHECKING:
     from src.core.runtime.profession import BaseProfession
     from src.core.inventory.model import DynamicInventories
 
+from redis_service_client import RedisEventBus, RedisLock, EventCallback
+
 from src.core.core_account import Account
 from src.core.logging.loggers import get_scheduler_logger
-from src.core.runtime.event_bus import EventBus, EventCallback
 from src.core.runtime.request_router import RequestContext, RequestRouter
 from src.core.runtime.conditions import Condition
 from src.core.runtime.profession import BaseProfession, RequestResult
@@ -99,7 +100,7 @@ class AccountContainer:
         self,
         scheduler: "EventDrivenScheduler", 
         profession_id: str, 
-        event_bus: "EventBus", 
+        event_bus: "RedisEventBus", 
         router: "RequestRouter"
     ) -> None:
         
@@ -125,7 +126,7 @@ class AccountContainer:
         await self.sync_monitors(scheduler, event_bus)
         log.info(f"[{account_id}] profession {profession_id!r} removed")
 
-    async def sync_monitors(self, scheduler: "EventDrivenScheduler", bus: "EventBus") -> None:
+    async def sync_monitors(self, scheduler: "EventDrivenScheduler", bus: "RedisEventBus") -> None:
         """
         Синхронізує активні монітори з поточним набором професій.
         Видаляє зайві, підключає відсутні (якщо потрібно).
@@ -150,7 +151,7 @@ class AccountContainer:
     async def teardown_all(
         self, 
         scheduler: "EventDrivenScheduler",
-        bus: "EventBus", 
+        bus: "RedisEventBus", 
         route: "RequestRouter"
     ) -> None:
         """Повне вимкнення всього контейнера (при видаленні або паузі)."""
@@ -185,6 +186,10 @@ class EventDrivenScheduler:
             # Саме цей loop стає "домашнім" для всіх Account/BotSession,
             # створених через цей scheduler.
             inst._home_loop = asyncio.get_running_loop()
+            # Піднімаємо Redis-listener ДО повернення інстансу — інакше
+            # перші emit_event()/subscribe() під час restore_accounts()
+            # можуть пройти повз ще не готовий psubscribe.
+            await inst._event_bus.start()
             cls._instance = inst
             return inst
 
@@ -212,11 +217,19 @@ class EventDrivenScheduler:
         self._containers:  dict[str, AccountContainer] = {}
         self._lock        = threading.Lock()
 
-        self._event_bus    = EventBus()
+        # Розподілений (Redis-backed) event-bus замість колишнього
+        # in-process EventBus — subscribe()/emit_event() тепер бачать усі
+        # процеси/поди, що слухають той самий Redis, а не лише поточний.
+        self._event_bus    = RedisEventBus()
         self._router       = RequestRouter()
         self._async_loop:  Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread: Optional[threading.Thread] = None
-        self._loading_lock: Optional[asyncio.Lock] = None
+
+        # Розподілений лок «перший хто встиг парсить каталог» (раніше —
+        # asyncio.Lock, локальний для одного процесу).
+        self._loader_lock: RedisLock = self._event_bus.lock(
+            "scheduler:catalog_loader_lock", ttl_ms=120_000,
+        )
 
         # "Домашній" loop — той, у якому виконався initialize().
         # Усі Account/BotSession (а отже curl_cffi.AsyncSession) живуть і
@@ -277,11 +290,11 @@ class EventDrivenScheduler:
         if self._loop_thread and self._loop_thread.is_alive():
             self._loop_thread.join(timeout=10)
 
+        await self._event_bus.stop()
         log.info("EventDrivenScheduler stopped")
 
     def _run_async_loop(self) -> None:
         asyncio.set_event_loop(self._async_loop)
-        self._loading_lock = asyncio.Lock()
         self._async_loop.run_forever()
 
     # ── Account management ────────────────────────────────────────────────────
@@ -495,16 +508,15 @@ class EventDrivenScheduler:
         self._event_bus.subscribe(event_name, callback)
 
     async def try_acquire_loader_lock(self) -> bool:
-        if self._loading_lock is None:
-            return True
-        if self._loading_lock.locked():
-            return False
-        await self._loading_lock.acquire()
-        return True
+        """
+        Розподілений (Redis SET NX PX) лок «перший хто встиг парсить
+        каталог». На відміну від колишнього asyncio.Lock — діє на весь
+        кластер процесів/подів, а не лише в межах поточного.
+        """
+        return await self._loader_lock.try_acquire()
 
     async def release_loader_lock(self) -> None:
-        if self._loading_lock is not None and self._loading_lock.locked():
-            self._loading_lock.release()
+        await self._loader_lock.release()
 
     async def emit_event(
         self,
@@ -513,9 +525,10 @@ class EventDrivenScheduler:
         source:     str = "system",
     ) -> int:
         """
-        ДУБЛЮВАННЯ-1 виправлено: єдиний метод emit_event — повноцінний await,
-        повертає кількість успішних підписників.
-        emit_event_async() видалено — він був надлишковим alias-ом.
+        Публікує подію в Redis (RedisEventBus.emit) — доставляється всім
+        підписникам у всіх процесах/подах, що слухають той самий Redis,
+        а не лише поточному процесу (як було з in-process EventBus).
+        Повертає кількість ЛОКАЛЬНИХ підписників (орієнтир для логів).
 
         Автозбереження: якщо payload містить account_id — зберігає inventory
         після emit, щоб зміни зроблені монітором перед emit не пропали.

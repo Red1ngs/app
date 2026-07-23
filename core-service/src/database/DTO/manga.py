@@ -14,6 +14,7 @@ class MangaRow:
     views:         int
     created_at:    Optional[str]
     updated_at:    Optional[str]
+    manga_link_id: int | None = None
 
 
 @dataclass

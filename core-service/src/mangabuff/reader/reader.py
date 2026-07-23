@@ -358,4 +358,12 @@ class ReaderProfession(BaseProfession):
             translit_names = valid,
         )
         log.info(f"mark_read: {total} глав позначено для {valid}")
+
+        if total > 0:
+            await scheduler.emit_event(
+                "reader.chapters_marked",
+                {"account_id": self._account_id, "marked": total, "mangas": valid},
+                source=self._account_id,
+            )
+
         return RequestResult.approve(data={"marked": total, "mangas": valid})

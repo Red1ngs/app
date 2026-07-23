@@ -1,8 +1,11 @@
 """
 core_account.py — модель акаунта + сесія.
 
-Account не знає про Scheduler, Profession чи EventBus (крім самого
-event_bus, який належить йому).
+Account не знає про Scheduler, Profession чи будь-яку event-bus —
+socket-події (SocketService) і всі інші події тепер ідуть виключно
+через ГЛОБАЛЬНИЙ scheduler-bus (EventDrivenScheduler.emit_event/
+subscribe, на Redis) з фільтрацією по account_id у payload, за тим
+самим патерном, що вже використовував DayAnnouncerService.
 
 Account НЕ зберігає email/password/proxy — ці дані взагалі не тримаються
 на боці core-service (ні в пам'яті, ні на диску, ні в .env). Єдине, що
@@ -33,7 +36,6 @@ from src.core.stats import stats_factory, DynamicStats as Stats
 from src.database.repository.factory import Repositories
 from src.core.status import AccountStatus
 from src.core.logging.loggers import get_account_logger
-from src.core.runtime.event_bus import EventBus
 
 if TYPE_CHECKING:
     from src.mangabuff.session import BotSession
@@ -54,11 +56,6 @@ class Account:
         self.repo:         Repositories  = repo
         self.inventories:  Inventories   = self.repo.inventory.load(self.account_id)
         self.recorder:     Stats         = stats_factory.build()
-
-        # Персональна шина подій акаунта. SocketService ретранслює сюди
-        # socket-події, отримані через account_events (Redis) з
-        # account-service. Profession підписується через scheduler.subscribe().
-        self.event_bus:    EventBus      = EventBus()
 
         # CoreService-и що автоматично прив'язані до цього акаунта.
         self.core_services: list["CoreService"] = []

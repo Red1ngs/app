@@ -16,9 +16,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+from redis_service_client import RedisEventBus
+
 from src.core.monitoring.monitor import BaseMonitor, monitor_registry
 from src.core.logging.loggers import get_logger
-from src.core.runtime.event_bus import EventBus
 
 if TYPE_CHECKING:
     from src.core.runtime.scheduler import EventDrivenScheduler
@@ -82,12 +83,12 @@ class AccountMonitors:
         self,
         scheduler:  "EventDrivenScheduler",
         monitor_id: str,
-        bus: "EventBus"
+        bus: "RedisEventBus"
     ) -> bool:
         """
         Відключає монітор. Ідемпотентний.
 
-        EventBus підписки зачищаються автоматично через
+        RedisEventBus підписки зачищаються автоматично через
         scheduler._event_bus.unsubscribe_owner(monitor).
         """
         monitor = self._monitors.pop(monitor_id, None)
@@ -95,7 +96,7 @@ class AccountMonitors:
             return False
 
         try:
-            # Знімаємо всі EventBus підписки цього монітора
+            # Знімаємо всі RedisEventBus підписки цього монітора
             bus.unsubscribe_owner(monitor)
             await monitor.detach(scheduler, self._account_id)
             log.info(
@@ -121,14 +122,14 @@ class AccountMonitors:
     async def detach_many(
         self, 
         scheduler: "EventDrivenScheduler", 
-        bus: "EventBus",
+        bus: "RedisEventBus",
         monitor_ids: list[str],
     ) -> None:
         """Відключає кілька моніторів послідовно."""
         for mid in monitor_ids:
             await self.detach(scheduler, mid, bus)
 
-    async def detach_all(self, scheduler: "EventDrivenScheduler", bus: "EventBus") -> None:
+    async def detach_all(self, scheduler: "EventDrivenScheduler", bus: "RedisEventBus") -> None:
         """Відключає всі активні монітори."""
         for mid in list(self._monitors.keys()):
             await self.detach(scheduler, mid, bus)

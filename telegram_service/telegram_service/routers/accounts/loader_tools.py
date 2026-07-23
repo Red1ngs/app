@@ -15,7 +15,7 @@ router = Router(name="accounts:loader_tools")
 # ── Реєстрація пунктів меню ───────────────────────────────────────────────────
 
 profession_menu_registry.register(
-    profession_id="catalog_loader",
+    profession_id="manga_loader",
     label="🔄 Скинути сторінку каталогу",
     callback_template="acc:reset_catalog_page:{acc_id}",
 )
@@ -34,8 +34,8 @@ async def cb_reset_catalog_page(
         await call.answer("❌ Акаунт не знайдено", show_alert=True)
         return
 
-    if "catalog_loader" not in info.professions:
-        await call.answer("❌ Доступно тільки для catalog_loader", show_alert=True)
+    if "manga_loader" not in info.professions:
+        await call.answer("❌ Доступно тільки для manga_loader", show_alert=True)
         return
 
     ok, err = await svc.reset_catalog_page(acc_id)

@@ -23,8 +23,9 @@ class Manga:
     translit_name: str
     name:          str
     rating:        str
-    info:          str
     image:         str
+    info:          str = ""
+    views:         int = 0
 
 
 @dataclass

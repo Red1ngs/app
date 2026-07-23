@@ -39,24 +39,3 @@ class LoaderInventory(BaseInventory):
 
     def __repr__(self) -> str:
         return f"<LoaderInventory catalog_page={self.catalog_page}>"
-    
-    
-@dataclass
-class CatalogLoaderInventory(BaseInventory):
-    """
-    Per-account стан CatalogLoaderProfession.
-
-    catalog_page — фікс #6: кожен акаунт пам'ятає свою сторінку каталогу
-                   незалежно від кількості манг у спільній БД.
-    """
-
-    @property
-    def catalog_page(self) -> int:
-        return int(self.data.get("catalog_page", 1))
-
-    @catalog_page.setter
-    def catalog_page(self, value: int) -> None:
-        self.data["catalog_page"] = max(1, value)
-
-    def __repr__(self) -> str:
-        return f"<CatalogLoaderInventory catalog_page={self.catalog_page}>"

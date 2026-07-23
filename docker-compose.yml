@@ -23,7 +23,7 @@ services:
       LOG_LEVEL: "INFO"
       ACCOUNT_SERVICE_TOKEN: "${ACCOUNT_SERVICE_TOKEN:-}"
     volumes:
-      - ../data/account:/data
+      - account_data:/data
     depends_on:
       redis:
         condition: service_healthy
@@ -53,15 +53,13 @@ services:
     build:
       context: ./day_service
     restart: unless-stopped
-    # Без HTTP-сервера — сервіс не слухає жодного порту. Healthcheck
-    # (heartbeat-файл) заданий у Dockerfile сервісу.
     environment:
       DAY_SERVICE_DB_PATH: "/data/day_service.db"
       REDIS_URL: "redis://redis:6379/0"
       TZ: "Europe/Kiev"
       LOG_LEVEL: "INFO"
     volumes:
-      - ../data/day:/data
+      - day_data:/data
     depends_on:
       redis:
         condition: service_healthy
@@ -91,7 +89,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ../data/core:/app/data
+      - core_data:/app/data
       - ../data/logs:/app/logs
       - ./core-service/app.yaml:/app/app.yaml:ro
     depends_on:
@@ -106,18 +104,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    # Порт RPC НЕ прокинутий назовні за замовчуванням — той самий принцип,
-    # що й у account-service вище: telegram-service резолвить
-    # "core-service" нативно через docker-мережу. Розкоментуй лише для
-    # ручного дебагу і обов'язково задай CORE_SERVICE_TOKEN, інакше
-    # /rpc/{method} дає будь-кому в мережі повний доступ до бізнес-логіки.
-    # ports:
-    #   - "8200:8200"
 
-  # ── Адмінський Telegram-бот (окремий сервіс) ──────────────────────────────
-  # Жодної бізнес-логіки, жодного доступу до БД/логів на диску — лише
-  # Telegram UI-шар, що ходить у core-service по HTTP RPC. Див.
-  # telegram_service/README.md.
+  # ── Адмінський Telegram-бот ────────────────────────────────────────────────
   telegram-service:
     build:
       context: ./telegram_service
@@ -130,3 +118,9 @@ services:
     depends_on:
       core-service:
         condition: service_healthy
+
+# Оголошення томів на верхньому рівні (без відступів!)
+volumes:
+  account_data:
+  day_data:
+  core_data:

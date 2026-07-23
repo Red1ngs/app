@@ -89,6 +89,7 @@ class ReadingMonitor(LoopingMonitor):
         scheduler.subscribe("loader.chapters_ready",     self._on_chapters_ready)
         scheduler.subscribe("daily.claimed",             self._on_daily_claimed)
         scheduler.subscribe("reader.chapters_exhausted", self._on_chapters_exhausted)
+        scheduler.subscribe("reader.chapters_marked",    self._on_chapters_marked)
         scheduler.subscribe("reader.reward_received",    self._on_reward_received)
         scheduler.subscribe("reader.slot_limit_reached", self._on_slot_limit_reached)
 
@@ -388,3 +389,17 @@ class ReadingMonitor(LoopingMonitor):
 
         if not self._sleeping and not self._slot_limit_reached:
             await self._schedule_next()
+            
+    async def _on_chapters_marked(self, payload: dict[str, Any]) -> None:
+        if payload.get("account_id") != self._account_id:
+            return
+        self.log.info(
+            f"[ReadingMonitor] reader.chapters_marked ({payload.get('marked')} глав) "
+            f"→ достроковий ask"
+        )
+        # Адмін вручну позначив глави прочитаними — стан черги змінився,
+        # має сенс перевірити чергу негайно, а не чекати старого таймера
+        # чи застряглого sleeping/slot_limit.
+        self._sleeping           = False
+        self._slot_limit_reached = False
+        await self._schedule_next(delay=0.0)

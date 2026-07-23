@@ -11,7 +11,7 @@ ProfessionSpec замінює два розрізнених хардкоди:
         id       = "reader",
         cls      = ReaderProfession,
         monitors = ["reading"],
-        deps     = ["manga_loader", "catalog_loader"],
+        deps     = ["manga_loader"],
     ))
     profession_registry.add(ProfessionSpec(
         id  = "manga_loader",
@@ -25,7 +25,7 @@ ProfessionSpec замінює два розрізнених хардкоди:
 
 Після цього:
     profession_registry.build("reader")
-    → [ReaderProfession(), MangaLoaderProfession(), CatalogLoaderProfession()]
+    → [ReaderProfession(), MangaLoaderProfession()]
 
     profession_registry.monitors_for("reader")
     → ["reading"]

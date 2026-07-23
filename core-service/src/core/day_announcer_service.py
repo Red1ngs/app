@@ -2,7 +2,8 @@
 src/core/day_announcer_service.py — DayAnnouncerService (CoreService).
 
 Міст між day-service (окремий сервіс, тільки Redis, без HTTP — див.
-/day_service) і локальним EventBus, на який підписаний DailyMonitor.
+/day_service) і глобальним scheduler-bus (Redis), на який підписаний
+DailyMonitor.
 
 Побудований за ТИМ САМИМ патерном, що SocketService
 (src/mangabuff/session/socket/socket_service.py) для account_event_bus:
@@ -10,12 +11,12 @@ src/core/day_announcer_service.py — DayAnnouncerService (CoreService).
                   підписує day_event_bus на "new_day" для цього акаунта
     unbind()    — відписується і знімає реєстрацію
 
-На відміну від SocketService (який ретранслює в bot.event_bus),
-DailyMonitor підписується не на bot.event_bus, а на ГЛОБАЛЬНИЙ
+DailyMonitor підписується не на персональну шину акаунта (такої більше
+нема — Account.event_bus видалено), а на ГЛОБАЛЬНИЙ
 scheduler-bus (scheduler.subscribe("daily.force_claim"/"account.unbanned"))
 — так само подія "новий день" ретранслюється саме туди
-(EventDrivenScheduler.get_instance().emit_event(...)), а не в bot.event_bus,
-щоб DailyMonitor.attach() не довелось міняти патерн підписки заради
+(EventDrivenScheduler.get_instance().emit_event(...)), щоб
+DailyMonitor.attach() не довелось міняти патерн підписки заради
 одного джерела подій.
 
 Реєстрація (mangabuff/setup.py):

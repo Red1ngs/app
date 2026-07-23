@@ -1,0 +1,70 @@
+Metadata-Version: 2.4
+Name: core-service
+Version: 0.2.0
+Summary: Business core: scheduler, professions (mining/quiz/daily/reader/...), exposed to other services (telegram-service, ...) exclusively via generic HTTP RPC (src/core/rpc/server.py). No Telegram/aiogram here anymore — see ../telegram_service.
+Requires-Python: >=3.13
+Description-Content-Type: text/markdown
+Requires-Dist: bs4>=0.0.2
+Requires-Dist: dotenv>=0.9.9
+Requires-Dist: httpx[http2,https2]>=0.28.1
+Requires-Dist: redis>=5.1.0
+Requires-Dist: pytz>=2026.2
+Requires-Dist: pyyaml>=6.0.3
+Requires-Dist: tzdata>=2026.2
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.32.0
+Requires-Dist: account-service-client @ git+ssh://git@github.com/Red1ngs/account-service.git@v0.1.0#subdirectory=client
+Requires-Dist: redis-service-client
+
+# core-service
+
+Бізнес-ядро (scheduler, professions: mining/quiz/daily/reader/...).
+HTTP/auth/cookies/socket для акаунтів тут немає — це `account-service`,
+окремий репозиторій-сиблінг (`../../account-service/service` відносно
+цієї директорії, свій git/pyproject/Dockerfile). Адмінського
+Telegram-бота теж немає — він живе у власному контейнері
+`../telegram_service/` (сиблінг-директорія в цьому ж репо, не окремий
+git-репозиторій), що звертається сюди виключно по HTTP RPC
+(`src/core/rpc/server.py`, деталі — `../telegram_service/README.md` і
+`../ARCHITECTURE.md`).
+
+Піднімається разом з `account-service`, `day-service` і
+`telegram-service` одним `docker-compose.yml` з кореня репо (на рівень
+вище цієї директорії) — усі в одній docker-мережі, кожен звертається до
+свого сусіда напряму по імені контейнера (`account-service`,
+`core-service`, ...). Див. коментарі в `../docker-compose.yml` і
+`../ARCHITECTURE.md`.
+
+```bash
+# з кореня репо (не з цієї директорії)
+docker compose up --build core-service
+```
+
+Runtime-конфіг (`app.yaml`, `.env`) монтується як volume, а не
+запікається в образ — див. `../docker-compose.yml`.
+
+## Приватний репозиторій (account-service-client)
+
+`pyproject.toml` встановлює `account-service-client` з приватного
+git-репозиторію по SSH (`git+ssh://git@github.com/...`). Перед
+`docker compose up --build` переконайся, що:
+
+1. У тебе запущений `ssh-agent` з доданим ключем, який має доступ до
+   цього репозиторію (`ssh-add -l` показує ключ; `ssh -T git@github.com`
+   підключається успішно).
+2. BuildKit увімкнено (в сучасних версіях Docker — за замовчуванням;
+   інакше `export DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1`).
+
+Форвардинг ключа в білд уже прописаний у `../docker-compose.yml`
+(`ssh: [default]` у сервісі `core-service`) — додатково нічого
+передавати в команду не треба.
+
+## Локальний запуск без Docker
+
+```bash
+pip install -e . --break-system-packages
+python main.py
+```
+
+Потребує запущеного `redis` і `account-service` (див. `.env.example` у
+корені репо для потрібних змінних середовища).

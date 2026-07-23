@@ -529,7 +529,7 @@ class SchedulerService:
     async def reset_catalog_page(self, account_id: str) -> tuple[bool, str]:
         res = await self._run_on_home_loop(lambda: self._scheduler.ask(
             account_id,
-            profession_id="catalog_loader",
+            profession_id="manga_loader",
             intent="reset_catalog_page",
             data={},
         ))

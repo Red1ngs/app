@@ -19,7 +19,9 @@ CATALOG_PAGE_SIZE: int = 30
 CHAPTER_SAVE_BATCH_SIZE: int = 5
 
 
-# --- ДОПОМІЖНІ ФУНКЦІЇ ДЛЯ БЕЗПЕЧНОЇ РОБОТИ З HTML ---
+# =============================================================================
+# ЗАГАЛЬНІ ДОПОМІЖНІ ФУНКЦІЇ ДЛЯ БЕЗПЕЧНОЇ РОБОТИ З HTML
+# =============================================================================
 
 def _create_soup(html: str) -> Optional[BeautifulSoup]:
     """Створює об'єкт BeautifulSoup з обробкою винятків."""
@@ -42,7 +44,20 @@ def _extract_raw_attribute(item: Tag, attr: str) -> Optional[str]:
         return None
 
 
-# --- ПАРСИНГ ЗОБРАЖЕНЬ ТА СТИЛІВ ---
+def _clean_and_parse_views(raw_text: str) -> int:
+    """Очищає текст переглядів від пробілів та конвертує у ціле число."""
+    try:
+        # Прибираємо нерозривні та звичайні пробіли
+        cleaned = raw_text.replace("\xa0", "").replace(" ", "")
+        return int(cleaned)
+    except (ValueError, TypeError):
+        log.debug("Не вдалося конвертувати manga__views у число: %s", raw_text)
+        return 0
+
+
+# =============================================================================
+# ПАРСИНГ ЗОБРАЖЕНЬ ТА СТИЛІВ
+# =============================================================================
 
 def _extract_style_attribute(img_tag: Tag) -> str:
     """Отримує значення атрибута style."""
@@ -66,7 +81,9 @@ def _extract_image_url(img_tag: Tag) -> str:
     return _parse_url_from_style(style)
 
 
-# --- ПАРСИНГ ТОМІВ ТА ГЛАВ З URL ---
+# =============================================================================
+# ПАРСИНГ ТОМІВ ТА ГЛАВ З URL
+# =============================================================================
 
 def _get_path_parts_from_url(url: str) -> list[str]:
     """Розбирає шлях URL на окремі сегменти."""
@@ -101,7 +118,9 @@ def _parse_vol_chap_from_url(url: str) -> tuple[Optional[int], Optional[float]]:
     return volume, chapter
 
 
-# --- ПАРСИНГ ДЕТАЛЕЙ МАНГИ З КАТАЛОГУ ---
+# =============================================================================
+# ПАРСИНГ ДЕТАЛЕЙ МАНГИ З КАТАЛОГУ (КАРТКИ)
+# =============================================================================
 
 def _extract_translit_name(url_raw: str, data_id_raw: str) -> Optional[str]:
     """Визначає транслітеровану назву манги з її URL."""
@@ -115,10 +134,10 @@ def _extract_translit_name(url_raw: str, data_id_raw: str) -> Optional[str]:
         return None
 
 
-def _extract_manga_name(item: Tag, data_id_raw: Optional[str]) -> Optional[str]:
+def _extract_card_name(card: Tag, data_id_raw: Optional[str]) -> Optional[str]:
     """Безпечно отримує назву манги з відповідного класу."""
     try:
-        name_tag = item.select_one(".cards__name")
+        name_tag = card.select_one(".cards__name")
         if not name_tag:
             log.warning("Відсутній .cards__name (data-id=%s)", data_id_raw)
             return None
@@ -128,14 +147,15 @@ def _extract_manga_name(item: Tag, data_id_raw: Optional[str]) -> Optional[str]:
         return None
 
 
-def _extract_manga_rating(item: Tag) -> str:
+def _extract_card_rating(card: Tag) -> str:
     """Отримує рейтинг, якщо він є."""
     try:
-        rating_tag = item.select_one(".cards__rating")
+        rating_tag = card.select_one(".cards__rating")
         return rating_tag.get_text(strip=True) if rating_tag else ""
     except Exception as e:
         log.debug("Помилка під час отримання .cards__rating: %s", e)
         return ""
+
 
 def _extract_tags_text(tags_container: Tag) -> str:
     """Вилучає текст із елементів .tags__item, ігноруючи кнопку 'показати більше'."""
@@ -152,11 +172,11 @@ def _extract_tags_text(tags_container: Tag) -> str:
 
             # Отримуємо класи та явно перевіряємо їхній тип для Pylance
             classes = element.get("class")
-            
+
             # Якщо класи повернулися списком (стандартна поведінка для HTML)
             if isinstance(classes, list) and "tags__item-more" in classes:
                 continue
-            
+
             # Якщо класи повернулися як один рядок (на випадок XML-режиму)
             if isinstance(classes, str) and "tags__item-more" == classes:
                 continue
@@ -170,40 +190,38 @@ def _extract_tags_text(tags_container: Tag) -> str:
         log.debug("Помилка обробки списку тегів: %s", e)
         return ""
 
-def _extract_manga_info(item: Tag) -> str:
+
+def _extract_card_info(card: Tag) -> str:
     """
-    Парсить інформацію про мангу. 
-    Підтримує нову структуру з тегами .tags та стару з .cards__info.
+    Парсить інформацію про мангу зі старої структури картки каталогу (.cards__info).
+
+    Увага: .tags та .manga__views належать сторінці конкретної манги
+    (div.manga), а не картці каталогу — там їх шукати марно. Повне info
+    (жанри/теги) та views заповнюються окремо через parse_manga_info() /
+    parse_manga_views() після завантаження сторінки манги.
     """
     try:
-        # Спочатку шукаємо новий контейнер з тегами
-        tags_container = item.select_one(".tags")
-        if tags_container:
-            return _extract_tags_text(tags_container)
-
-        # Резервний варіант для старої структури картки
-        info_tag = item.select_one(".cards__info")
+        info_tag = card.select_one(".cards__info")
         return info_tag.get_text(strip=True) if info_tag else ""
-
     except Exception as e:
-        log.debug("Не вдалося розпарсити інформацію (info): %s", e)
+        log.debug("Не вдалося розпарсити .cards__info: %s", e)
         return ""
 
 
-def _extract_manga_image(item: Tag) -> str:
+def _extract_card_image(card: Tag) -> str:
     """Отримує та парсить тег зображення."""
     try:
-        img_tag = item.select_one(".cards__img")
+        img_tag = card.select_one(".cards__img")
         return _extract_image_url(img_tag) if img_tag else ""
     except Exception as e:
         log.debug("Помилка під час обробки .cards__img: %s", e)
         return ""
 
 
-def _parse_manga_item(item: Tag) -> Optional[Manga]:
+def _parse_card_item(card: Tag) -> Optional[Manga]:
     """Збирає об'єкт Manga на основі виділених елементів."""
-    data_id_raw = _extract_raw_attribute(item, "data-id")
-    url_raw = _extract_raw_attribute(item, "href")
+    data_id_raw = _extract_raw_attribute(card, "data-id")
+    url_raw = _extract_raw_attribute(card, "href")
 
     if not data_id_raw or not url_raw:
         return None
@@ -214,7 +232,7 @@ def _parse_manga_item(item: Tag) -> Optional[Manga]:
         log.warning("Некоректний формат data_id: %s", data_id_raw)
         return None
 
-    name = _extract_manga_name(item, data_id_raw)
+    name = _extract_card_name(card, data_id_raw)
     if not name:
         return None
 
@@ -226,13 +244,15 @@ def _parse_manga_item(item: Tag) -> Optional[Manga]:
         data_id=data_id,
         translit_name=translit_name,
         name=name,
-        rating=_extract_manga_rating(item),
-        info=_extract_manga_info(item),
-        image=_extract_manga_image(item),
+        rating=_extract_card_rating(card),
+        info=_extract_card_info(card),
+        image=_extract_card_image(card),
     )
 
 
-# --- ПАРСИНГ ДЕТАЛЕЙ ГЛАВ ---
+# =============================================================================
+# ПАРСИНГ ДЕТАЛЕЙ ГЛАВ
+# =============================================================================
 
 def _extract_chapter_href(item: Tag) -> Optional[str]:
     """Безпечно отримує та валідує посилання на главу."""
@@ -248,11 +268,11 @@ def _extract_chapter_data_id(item: Tag) -> Optional[int]:
         like_btn = item.select_one("button.favourite-send-btn[data-id]")
         if not like_btn:
             return None
-        
+
         raw_id = like_btn.get("data-id")
         if not raw_id:
             return None
-        
+
         return int(str(raw_id))
     except (ValueError, TypeError) as e:
         log.warning("Некоректний чи відсутній data-id глави: %s", e)
@@ -311,31 +331,139 @@ def _parse_chapter_item(item: Tag) -> Optional[Chapter]:
     )
 
 
-# --- ГОЛОВНІ ПУБЛІЧНІ ФУНКЦІЇ ПАРСИНГУ ---
+# =============================================================================
+# ПАРСИНГ ДЕТАЛЕЙ ЗІ СТОРІНКИ КОНКРЕТНОЇ МАНГИ (div.manga)
+# =============================================================================
 
-def parse_catalog(html: str) -> dict[int, Manga]:
-    """Повертає {data_id: Manga} з HTML каталогу."""
+def _find_manga_page_container(soup: BeautifulSoup) -> Optional[Tag]:
+    """Шукає основний контейнер div.manga."""
+    try:
+        return soup.find("div", class_="manga")
+    except Exception as e:
+        log.warning("Помилка пошуку div.manga: %s", e)
+        return None
+
+
+def _extract_manga_page_info(soup: BeautifulSoup) -> str:
+    """
+    Отримує інформацію про мангу (жанри/теги) з <div class="tags">
+    на сторінці манги. На відміну від картки каталогу, тут цей
+    контейнер справді присутній.
+    """
+    try:
+        tags_container = soup.select_one(".tags")
+        return _extract_tags_text(tags_container) if tags_container else ""
+    except Exception as e:
+        log.debug("Не вдалося розпарсити .tags на сторінці манги: %s", e)
+        return ""
+    
+def parse_manga_data_id(soup: BeautifulSoup) -> Optional[int]:
+    """Парсить data_id манги зі сторінки манги (не з каталогу)."""
+
+    page_container = _find_manga_page_container(soup)
+    if not page_container:
+        log.warning("Не вдалося знайти div.manga на сторінці манги")
+        return None
+
+    raw_id = _extract_raw_attribute(page_container, "data-id")
+    if not raw_id:
+        log.warning("Не вдалося знайти data_id в елементі div.manga")
+        return None
+
+    try:
+        return int(raw_id)
+    except ValueError:
+        log.warning("Помилка конвертації data_id у число: %s", raw_id)
+        return None
+
+
+def parse_manga_views(soup: BeautifulSoup) -> int:
+    """Парсить кількість переглядів манги з <div class="manga__views">."""
+    try:
+        views_tag = soup.find("div", class_="manga__views")
+    except Exception as e:
+        log.error("Помилка пошуку div.manga__views: %s", e)
+        return 0
+
+    raw_text = views_tag.get_text(strip=True) if views_tag else ""
+    return _clean_and_parse_views(raw_text)
+
+
+# =============================================================================
+# ГОЛОВНІ ПУБЛІЧНІ ФУНКЦІЇ ПАРСИНГУ
+# =============================================================================
+
+def parse_catalog(html: str) -> list[str]:
+    """
+    Повертає список унікальних translit_name манг з HTML каталогу.
+
+    Раніше тут парсилась уся картка (назва/рейтинг/info/зображення) —
+    тепер цього не треба: повні дані манги (включно з views) все одно
+    беруться зі сторінки самої манги, бо це єдине місце, звідки можна
+    дістати глави. Каталог лишається лише джерелом translit_name —
+    списком "які манги взагалі існують".
+    """
     soup = _create_soup(html)
     if not soup:
-        return {}
+        return []
 
-    result: dict[int, Manga] = {}
     try:
         items = soup.select("a.cards__item")
     except Exception as e:
         log.error("Помилка під час виконання селектора cards__item: %s", e)
-        return {}
+        return []
 
-    for item in items:
-        try:
-            manga = _parse_manga_item(item)
-            if manga:
-                result[manga.data_id] = manga
-        except Exception as e:
-            log.error("Неочікувана помилка під час обробки картки манги: %s", e)
+    translits: list[str] = []
+    seen: set[str] = set()
 
-    return result
+    for card in items:
+        href = _extract_raw_attribute(card, "href")
+        if not href:
+            continue
+        data_id_raw = _extract_raw_attribute(card, "data-id") or ""
+        translit_name = _extract_translit_name(href, data_id_raw)
+        if translit_name and translit_name not in seen:
+            seen.add(translit_name)
+            translits.append(translit_name)
 
+    return translits
+
+
+def parse_manga_page(html: str, translit_name: str) -> Optional[Manga]:
+    """Парсить повні дані манги зі сторінки самої манги (div.manga)."""
+    soup = _create_soup(html)
+    if not soup:
+        return None
+
+    data_id = parse_manga_data_id(soup)
+    if data_id is None:
+        log.warning(f"parse_manga_page: не вдалося визначити data_id для {translit_name!r}")
+        return None
+
+    name_tag = soup.find(class_="manga__name")
+    name = name_tag.get_text(strip=True) if name_tag else ""
+    if not name:
+        log.warning(f"parse_manga_page: не вдалося визначити назву манги для {translit_name!r}")
+
+    rating_tag = soup.find("div", class_="manga__rating")
+    rating = rating_tag.get_text(strip=True) if rating_tag else ""
+
+    img_tag = soup.select_one(".manga__img img")
+    image = _extract_raw_attribute(img_tag, "src") if img_tag else ""
+
+    info = _extract_manga_page_info(soup)
+    views = parse_manga_views(soup)
+
+    return Manga(
+        data_id=data_id,
+        translit_name=translit_name,
+        name=name,
+        rating=rating,
+        image=image or "",
+        info=info,
+        views=views,
+    )
+        
 
 def parse_chapters(html: str) -> list[Chapter]:
     """Повертає список об'єктів Chapter з HTML сторінки манги."""
@@ -359,77 +487,3 @@ def parse_chapters(html: str) -> list[Chapter]:
             log.error("Неочікувана помилка під час обробки глави: %s", e)
 
     return chapters
-
-
-# --- ПАРСИНГ ID ТА ПЕРЕГЛЯДІВ НА СТОРІНЦІ МАНГИ ---
-
-def _find_manga_element(soup: BeautifulSoup) -> Optional[Tag]:
-    """Шукає основний контейнер div.manga."""
-    try:
-        return soup.find('div', class_='manga')
-    except Exception as e:
-        log.warning("Помилка пошуку div.manga: %s", e)
-        return None
-
-
-def parse_manga_data_id(html: str) -> Optional[int]:
-    """Парсить data_id манги зі сторінки манги (не з каталогу)."""
-    soup = _create_soup(html)
-    if not soup:
-        return None
-
-    manga_element = _find_manga_element(soup)
-    if not manga_element:
-        log.warning("Не вдалося знайти div.manga на сторінці манги")
-        return None
-
-    raw_id = _extract_raw_attribute(manga_element, 'data-id')
-    if not raw_id:
-        log.warning("Не вдалося знайти data_id в елементі div.manga")
-        return None
-
-    try:
-        return int(raw_id)
-    except ValueError:
-        log.warning("Помилка конвертації data_id у число: %s", raw_id)
-        return None
-
-
-def _find_views_tag(soup: BeautifulSoup) -> Optional[Tag]:
-    """Шукає елемент з кількістю переглядів."""
-    try:
-        return soup.find("div", class_="manga__views")
-    except Exception as e:
-        log.debug("Помилка пошуку manga__views: %s", e)
-        return None
-
-
-def _clean_and_parse_views(raw_text: str) -> int:
-    """Очищає текст переглядів від пробілів та конвертує у ціле число."""
-    try:
-        # Прибираємо нерозривні та звичайні пробіли
-        cleaned = raw_text.replace("\xa0", "").replace(" ", "")
-        return int(cleaned)
-    except (ValueError, TypeError):
-        log.debug("Не вдалося конвертувати manga__views у число: %s", raw_text)
-        return 0
-
-
-def parse_manga_views(html: str) -> int:
-    """Парсить кількість переглядів манги з <div class="manga__views">."""
-    soup = _create_soup(html)
-    if not soup:
-        return 0
-
-    views_tag = _find_views_tag(soup)
-    if not views_tag:
-        log.debug("manga__views не знайдено на сторінці манги")
-        return 0
-
-    try:
-        raw_text = views_tag.get_text(strip=True)
-    except Exception as e:
-        log.debug("Помилка при вилученні тексту з views_tag: %s", e)
-        return 0
-
-    return _clean_and_parse_views(raw_text)

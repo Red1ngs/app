@@ -15,6 +15,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "account-service-client @ git+ssh://git@github.com/Red1ngs/account-service.git@v0.1.0#subdirectory=client",
+    "redis-service-client @ git+ssh://git@github.com/Red1ngs/redis-service.git@v0.1.1#subdirectory=client",
 ]
 
 [build-system]

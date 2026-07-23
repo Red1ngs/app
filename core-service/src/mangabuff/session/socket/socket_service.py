@@ -2,7 +2,13 @@
 src/mangabuff/session/socket/socket_service.py — SocketService (CoreService).
 
 Роль лишилась та сама: міст між "сирими" socket-подіями акаунта і
-bot.event_bus, яким користуються Profession через scheduler.subscribe().
+ГЛОБАЛЬНИМ scheduler-bus (Redis), на який Profession підписується через
+scheduler.subscribe(). Раніше ретрансляція йшла в персональний
+bot.event_bus (in-process, окремий на кожен акаунт) — тепер, за тим
+самим патерном, що DayAnnouncerService для "daily.new_day", подія летить
+одразу в EventDrivenScheduler.emit_event(...) з account_id у payload;
+підписник сам фільтрує `payload.get("account_id") == self._account_id`
+(як це вже роблять ReadingMonitor тощо для інших глобальних подій).
 
 Що змінилось: BotSocket (транспорт wss10) тепер живе в account-service.
 Замість `session.socket.on(event, forwarder)` тут підписка йде через
@@ -47,7 +53,7 @@ _SOCKET_TO_BUS: dict[str, str] = {
 class SocketService(CoreService):
     """
     Прослуховує (через Redis) socket-події конкретного акаунта і
-    ретранслює їх в bot.event_bus.
+    ретранслює їх у глобальний scheduler-bus.
 
     Lifecycle:
         bind(bot)    — підписується на всі socket-події з мапи (Redis)
@@ -89,13 +95,21 @@ class SocketService(CoreService):
 
     def _make_forwarder(self, bot: "Account", bus_event: str):
         async def forwarder(data: Any) -> None:
+            from src.core.runtime.scheduler import EventDrivenScheduler
+
             payload = data if isinstance(data, dict) else ({"raw": data} if data is not None else {})
             payload = {**payload, "account_id": bot.account_id}
 
             log.debug(f"[{bot.account_id}] socket → bus [{bus_event}]: {payload}")
             try:
-                await bot.event_bus.emit(bus_event, payload, source="socket")
+                scheduler = EventDrivenScheduler.get_instance()
+            except RuntimeError:
+                # Скедулер ще/вже не піднятий (тести, рання ініціалізація) —
+                # нема куди емітити, тихо виходимо.
+                return
+            try:
+                await scheduler.emit_event(bus_event, payload, source="socket")
             except Exception as e:
-                log.error(f"[{bot.account_id}] event_bus.emit [{bus_event}] failed: {e}")
+                log.error(f"[{bot.account_id}] emit_event [{bus_event}] failed: {e}")
 
         return forwarder
