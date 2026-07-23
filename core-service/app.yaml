@@ -40,6 +40,10 @@ reader:
       slots:               ["candy", "card", "scroll"]
       fallback_interval_s: 5400
 
+    test:
+      slots:               ["candy"]
+      fallback_interval_s: 5400
+
   default_mode: "standard"
 
 daily:
