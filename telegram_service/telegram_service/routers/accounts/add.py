@@ -17,6 +17,7 @@ from aiogram.types import (
 
 from telegram_service.core_client import CoreServiceClient
 from ._common import cancel_add_kb, make_editor
+from ...utils.proxy_utils import normalize_proxy
 
 router = Router(name="accounts:add")
 
@@ -71,7 +72,20 @@ async def fsm_wait_id(message: Message, state: FSMContext, svc: CoreServiceClien
         await _edit(_TITLE + "❌ ID не може бути порожнім або містити пробіли.\nКрок 1/4: Введи ID ще раз:", cancel_add_kb())
         return
     if acc_id in await svc.account_ids():
-        await _edit(_TITLE + f"❌ Акаунт <code>{acc_id}</code> вже існує.\nКрок 1/4: Введи інший ID:", cancel_add_kb())
+        # Акаунт з таким ID вже є — швидше за все, це саме той акаунт, який
+        # хотіли додати. Замість тупика "введи інший ID" пропонуємо одразу
+        # перейти до нього; FSM завершуємо (state.clear), бо подальший ввід
+        # користувача вже не стосується форми додавання.
+        await state.clear()
+        await _edit(
+            _TITLE + f"⚠️ Акаунт <code>{acc_id}</code> вже існує.\n\n"
+            "Можна перейти до нього або ввести інший ID:",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➡️ Перейти до акаунта", callback_data=f"acc:menu:{acc_id}")],
+                [InlineKeyboardButton(text="🔁 Ввести інший ID", callback_data="acc:add")],
+                [InlineKeyboardButton(text="❌ Скасувати", callback_data="acc:add_cancel")],
+            ]),
+        )
         return
 
     await state.update_data(acc_id=acc_id)
@@ -142,13 +156,33 @@ async def cb_no_proxy(call: CallbackQuery, state: FSMContext, svc: CoreServiceCl
     await _finish_from_call(call, state, svc, proxy="")
 
 
+_PROXY_KB = InlineKeyboardMarkup(inline_keyboard=[[
+    InlineKeyboardButton(text="⏭ Без проксі", callback_data="acc:add_no_proxy"),
+    InlineKeyboardButton(text="❌ Скасувати",  callback_data="acc:add_cancel"),
+]])
+
+
 @router.message(AddAccountFSM.wait_proxy)
 async def fsm_wait_proxy(message: Message, state: FSMContext, svc: CoreServiceClient) -> None:
-    proxy = (message.text or "").strip()
+    raw = (message.text or "").strip()
     try:
         await message.delete()
     except Exception:
         pass
+    _edit = make_editor(message, await state.get_data(), already_deleted=True)
+
+    try:
+        proxy = normalize_proxy(raw)
+    except ValueError as e:
+        # Формат кривий (напр. подвійна схема http://...https://...) —
+        # ловимо тут, а не чекаємо помилку від account-service, і лишаємось
+        # у тому ж кроці, щоб дати спробувати ще раз.
+        await _edit(
+            _TITLE + f"❌ {e}\n\nКрок 4/4: Введи проксі ще раз або пропусти:",
+            _PROXY_KB,
+        )
+        return
+
     await _finish_from_msg(message, state, svc, proxy=proxy)
 
 
@@ -164,6 +198,36 @@ async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
         ]]),
     )
     await call.answer()
+
+
+async def _post_add_result(svc: CoreServiceClient, acc_id: str) -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Акаунт щойно успішно ЗАРЕЄСТРОВАНО (ok=True з add_account) — але це не
+    означає, що він підключився: проксі може бути неробочим, пароль
+    невірним тощо. У такому разі акаунт НЕ видаляється і НЕ ховається зі
+    списку (AccountManager просто виставляє йому статус error/dead/banned)
+    — тут лише чесно показуємо це користувачу одразу, замість "✅ Додано",
+    яке приховало б реальну проблему.
+    """
+    info = await svc.account_info(acc_id)
+    if info and info.status in ("ERROR", "DEAD", "SUSPENDED"):
+        reason = await svc.get_account_error(acc_id) or "невідома помилка"
+        text = (
+            f"⚠️ Акаунт <code>{acc_id}</code> додано, але не підключився:\n"
+            f"<code>{reason}</code>\n\n"
+            "Дані збережено — онови проксі/пароль і спробуй підключити ще раз."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚙️ Відкрити акаунт", callback_data=f"acc:menu:{acc_id}")],
+            [InlineKeyboardButton(text="📋 До списку", callback_data="acc:list")],
+        ])
+        return text, kb
+
+    text = (
+        f"✅ Акаунт <code>{acc_id}</code> додано!\n\n"
+        "Тепер <b>призначте професію</b> щоб запустити монітори."
+    )
+    return text, _success_kb(acc_id)
 
 
 # ── Спільна логіка завершення ─────────────────────────────────────────────────
@@ -187,11 +251,8 @@ async def _finish_from_call(
         return
     ok, err = await svc.add_account(acc_id, email, password, proxy)
     if ok:
-        await call.message.edit_text(  # type: ignore[union-attr]
-            f"✅ Акаунт <code>{acc_id}</code> додано!\n\n"
-            "Тепер <b>призначте професію</b> щоб запустити монітори.",
-            reply_markup=_success_kb(acc_id),
-        )
+        text, kb = await _post_add_result(svc, acc_id)
+        await call.message.edit_text(text, reply_markup=kb)  # type: ignore[union-attr]
     else:
         await call.message.edit_text(  # type: ignore[union-attr]
             f"❌ Помилка при додаванні:\n<code>{err}</code>",
@@ -224,11 +285,7 @@ async def _finish_from_msg(
     
     ok, err = await svc.add_account(acc_id, email, password, proxy)
     if ok:
-        text = (
-            f"✅ Акаунт <code>{acc_id}</code> додано!\n\n"
-            "Тепер <b>призначте професію</b> щоб запустити монітори."
-        )
-        kb = _success_kb(acc_id)
+        text, kb = await _post_add_result(svc, acc_id)
     else:
         text = f"❌ Помилка при додаванні:\n<code>{err}</code>"
         kb   = _error_kb()
