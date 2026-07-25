@@ -12,7 +12,7 @@ services:
       
   account-service:
     build:
-      context: ../account-service/service
+      context: ../account-service/services
     restart: unless-stopped
     environment:
       ACCOUNT_SERVICE_HOST: "0.0.0.0"

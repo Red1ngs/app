@@ -2,7 +2,7 @@
 
 Бізнес-ядро (scheduler, professions: mining/quiz/daily/reader/...).
 HTTP/auth/cookies/socket для акаунтів тут немає — це `account-service`,
-окремий репозиторій-сиблінг (`../../account-service/service` відносно
+окремий репозиторій-сиблінг (`../../account-service/services` відносно
 цієї директорії, свій git/pyproject/Dockerfile). Адмінського
 Telegram-бота теж немає — він живе у власному контейнері
 `../telegram_service/` (сиблінг-директорія в цьому ж репо, не окремий
