@@ -62,18 +62,22 @@ class BotSession:
 
     async def get(
         self, url: str, room: Optional[str] = None,
-        priority: str = "NORMAL", **kw: Any,
+        priority: str = "NORMAL", replaceable: Optional[bool] = None,
+        **kw: Any,
     ) -> RemoteResponse:
         return await self.account_client.request(
-            self.account_id, "GET", url, room=room, priority=priority, **kw,
+            self.account_id, "GET", url, room=room, priority=priority,
+            replaceable=replaceable, **kw,
         )
 
     async def post(
         self, url: str, room: Optional[str] = None,
-        priority: str = "NORMAL", **kw: Any,
+        priority: str = "NORMAL", replaceable: Optional[bool] = None,
+        **kw: Any,
     ) -> RemoteResponse:
         return await self.account_client.request(
-            self.account_id, "POST", url, room=room, priority=priority, **kw,
+            self.account_id, "POST", url, room=room, priority=priority, 
+            replaceable=replaceable, **kw,
         )
 
     # ── Повідомлення ──────────────────────────────────────────────────────────
@@ -211,7 +215,7 @@ class BotSession:
     async def _fetch_more_chapters(self, translit_name: str, manga_data_id: int, reader: ReaderAppCfg) -> HttpResult[str]:
         url = reader.urls.api_load
         room = reader.urls.manga_page.format(translit_name=translit_name)
-        r = await self.post(url, room=room, data={"manga_id": manga_data_id}, priority="BACKGROUND", timeout=15)
+        r = await self.post(url, room=room, data={"manga_id": manga_data_id}, replaceable=True, priority="BACKGROUND", timeout=15)
         r.raise_for_status()
         return http_success((r.json() or {}).get("content", ""))
 
