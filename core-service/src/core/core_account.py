@@ -99,6 +99,13 @@ class Account:
             # просимо підняти сесію за account_id.
             remote = await account_client.connect(self.account_id)
 
+            if remote.status == "banned":
+                # Постійна проблема — жодні повторні спроби її не виправлять.
+                # DEAD (а не ERROR), щоб ReconnectWatchdog/StartupManager більше
+                # не витрачали на цей акаунт спроби й проксі.
+                self.mark_dead(remote.error or "Акаунт заблокований на Mangabuff")
+                return False
+
             if not remote.is_connected:
                 return self._fail(remote.error or "Помилка підключення (account-service)")
 

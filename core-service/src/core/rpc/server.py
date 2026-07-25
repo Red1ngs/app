@@ -58,6 +58,9 @@ ALLOWED_METHODS: frozenset[str] = frozenset({
     "resume",
     "get_account_error",
     "find_account_by_email",
+    "account_status",
+    "reconnect_account",
+    "problem_accounts",
     "logs_list_accounts",
     "logs_tail_account",
     "logs_tail_scheduler",
@@ -85,6 +88,32 @@ def create_rpc_app(service: SchedulerService) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/accounts")
+    async def health_accounts() -> dict[str, Any]:
+        """
+        На відміну від /health (тільки "процес живий"), тут — реальний
+        стан акаунтів. НЕ підключено до docker healthcheck навмисно: якщо
+        акаунт забанили чи проксі відвалилось, це не привід перезапускати
+        весь контейнер (і тим більше не привід для docker-залежних
+        сервісів (`depends_on: condition: service_healthy`) вважати
+        core-service недоступним) — для цього є problem_accounts()/
+        ReconnectWatchdog і алерти в telegram-service. Цей ендпоінт —
+        для людини чи зовнішнього моніторингу (напр. Prometheus blackbox,
+        uptime-check), яка хоче знати, чи все дійсно ОК, а не тільки
+        "uvicorn відповідає".
+        """
+        total = len(await service.account_ids())
+        problems = await service.problem_accounts()
+        by_status: dict[str, int] = {}
+        for p in problems:
+            by_status[p["status"]] = by_status.get(p["status"], 0) + 1
+        return {
+            "total_accounts": total,
+            "problem_accounts": len(problems),
+            "by_status": by_status,
+            "details": problems,
+        }
 
     @app.post("/rpc/{method}", dependencies=[Depends(_check_token)])
     async def rpc(method: str, payload: RpcRequest) -> dict[str, Any]:

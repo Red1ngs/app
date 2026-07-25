@@ -50,6 +50,7 @@ from src.core.runtime.scheduler import EventDrivenScheduler
 from src.core.services.scheduler_service import SchedulerService
 from src.database.repository.account import AccountRepository
 from src.core.runtime.startup_manager import StartupManager, StartupConfig
+from src.core.runtime.reconnect_watchdog import ReconnectWatchdog
 
 
 async def restore_accounts(
@@ -125,6 +126,13 @@ async def main() -> None:
 
     await restore_accounts(svc, startup_cfg, repositories.accounts)
 
+    # Фонове відновлення акаунтів, що впали в ERROR ПІСЛЯ старту (StartupManager
+    # покриває тільки момент запуску процесу). Без цього єдиний спосіб підняти
+    # акаунт, що впав у ERROR (проксі зламалось, account-service перезапустився
+    # тощо) — ручний рестарт усього compose-стеку.
+    watchdog = ReconnectWatchdog(svc, app_cfg.reconnect)
+    watchdog.start()
+
     # RPC-сервер — єдина точка входу ззовні (замінює колишній in-process
     # admin-bot thread). telegram-service — типовий, але не єдиний можливий
     # клієнт: будь-який інший сервіс так само може ходити сюди по HTTP.
@@ -141,6 +149,7 @@ async def main() -> None:
             await asyncio.sleep(30)
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Shutdown requested...")
+        await watchdog.stop()
         try:
             # Обмежуємо час на очищення ресурсів
             await asyncio.wait_for(scheduler.stop(), timeout=20.0)

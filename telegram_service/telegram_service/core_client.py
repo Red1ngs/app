@@ -65,6 +65,13 @@ class SchedulerSnapshot:
     accounts:       list[AccountInfo]
 
 
+@dataclass(frozen=True)
+class ProblemAccount:
+    account_id: str
+    status:     str                 # "ERROR" | "DEAD"
+    error:      Optional[str] = None
+
+
 def _account_info_from_dict(d: dict[str, Any]) -> AccountInfo:
     mb = d["mangabuff"]
     return AccountInfo(
@@ -126,6 +133,13 @@ class CoreServiceClient:
 
     async def get_account_error(self, account_id: str) -> Optional[str]:
         return await self._rpc("get_account_error", account_id)
+
+    async def problem_accounts(self) -> list[ProblemAccount]:
+        raw = await self._rpc("problem_accounts")
+        return [
+            ProblemAccount(account_id=d["account_id"], status=d["status"], error=d.get("error"))
+            for d in raw
+        ]
 
     async def find_account_by_email(self, email: str) -> Optional[str]:
         return await self._rpc("find_account_by_email", email)

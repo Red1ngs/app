@@ -14,6 +14,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from src.core.status import AccountStatus
+
 if TYPE_CHECKING:
     from src.core.services.scheduler_service import SchedulerService
 
@@ -25,6 +27,8 @@ class StartupConfig:
     connect_delay:   float = 5.0
     connect_timeout: float = 30.0
     skip_failed:     bool  = True
+    connect_retries: int   = 3
+    retry_backoff:   float = 5.0
 
     @classmethod
     def from_app_config(cls, cfg) -> "StartupConfig":
@@ -35,6 +39,8 @@ class StartupConfig:
             connect_delay=getattr(s, "connect_delay", 5.0),
             connect_timeout=getattr(s, "connect_timeout", 30.0),
             skip_failed=getattr(s, "skip_failed", True),
+            connect_retries=getattr(s, "connect_retries", 3),
+            retry_backoff=getattr(s, "retry_backoff", 5.0),
         )
 
 
@@ -96,7 +102,7 @@ class StartupManager:
     async def _start_one(self, account_id: str) -> None:
         scheduler = self._service._scheduler
 
-        ok = await scheduler.connect_account(account_id)
+        ok = await self._connect_with_retries(account_id)
         if not ok:
             bot = scheduler.get_bot(account_id)
             err = (bot.error if bot else None) or "connect() повернув False"
@@ -110,3 +116,39 @@ class StartupManager:
         await scheduler.setup_professions(account_id, professions)
         self._ok.append(account_id)
         log.info(f"[StartupManager] ✓ '{account_id}' готово")
+
+    async def _connect_with_retries(self, account_id: str) -> bool:
+        """
+        Повторює connect_account() до `connect_retries` разів з паузою
+        `retry_backoff` між спробами.
+
+        Раніше акаунт мав рівно ОДНУ спробу підключення на весь час життя
+        процесу: транзитна мережева гикавка (наприклад, 5-секундний
+        timeout проксі рівно в момент старту контейнера) назавжди ховала
+        акаунт у стан ERROR — без ретраю тут єдиним "ліками" лишався
+        ручний рестарт усього compose-стеку.
+
+        Забанені акаунти (bot.status == DEAD, виставляється в
+        Account.connect() при remote.status == "banned") — не ретраїмо:
+        подальші спроби нічого не змінять, тільки марно палять час і
+        проксі-запити.
+        """
+        scheduler = self._service._scheduler
+
+        for attempt in range(1, self._cfg.connect_retries + 1):
+            if await scheduler.connect_account(account_id):
+                return True
+
+            bot = scheduler.get_bot(account_id)
+            if bot is not None and bot.status is AccountStatus.DEAD:
+                return False
+
+            if attempt < self._cfg.connect_retries:
+                log.warning(
+                    f"[StartupManager] [{account_id}] спроба {attempt}/{self._cfg.connect_retries} "
+                    f"невдала ({(bot.error if bot else None) or '?'}), "
+                    f"повтор через {self._cfg.retry_backoff}s …"
+                )
+                await asyncio.sleep(self._cfg.retry_backoff)
+
+        return False

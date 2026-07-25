@@ -115,6 +115,10 @@ services:
       ADMIN_IDS: "${ADMIN_IDS:?ADMIN_IDS не задано}"
       CORE_SERVICE_URL: "http://core-service:8200"
       CORE_SERVICE_TOKEN: "${CORE_SERVICE_TOKEN:-}"
+      # Алерти про проблемні акаунти (ProblemAccountsNotifier) — не обов'язкові,
+      # є розумні дефолти (90s / 5хв). Розкоментуй і підкрути за потреби.
+      # PROBLEM_POLL_INTERVAL: "90"
+      # PROBLEM_ERROR_ALERT_AFTER: "300"
     depends_on:
       core-service:
         condition: service_healthy

@@ -28,12 +28,20 @@ log = logging.getLogger("telegram_service")
 from telegram_service.bot import create_bot
 from telegram_service.config import TelegramBotConfig
 from telegram_service.core_client import CoreServiceClient
+from telegram_service.watchdog import ProblemAccountsNotifier
 
 
 async def main() -> None:
     config = TelegramBotConfig.from_env()
     client = CoreServiceClient(config.core_service_url, config.core_service_token)
     dp, bot = create_bot(config, client)
+
+    notifier = ProblemAccountsNotifier(
+        client, bot, config.admin_ids,
+        poll_interval=config.problem_poll_interval,
+        error_alert_after=config.problem_error_alert_after,
+    )
+    notifier.start()
 
     stop_event = asyncio.Event()
 
@@ -52,6 +60,8 @@ async def main() -> None:
     polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
 
     await stop_event.wait()
+
+    await notifier.stop()
 
     await dp.stop_polling()
     try:

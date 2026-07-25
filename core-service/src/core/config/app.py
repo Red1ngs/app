@@ -339,10 +339,15 @@ class StartupCfg:
           connect_delay: 5.0       # пауза між connect() двох акаунтів (сек)
           connect_timeout: 30.0    # таймаут одного connect()
           skip_failed: true        # пропустити збійний акаунт, не зупиняти старт
+          connect_retries: 3       # спроб connect() ОДНОГО акаунта перед тим, як
+                                   # здатись і передати його ReconnectWatchdog-у
+          retry_backoff: 5.0       # пауза між спробами connect() того самого акаунта
     """
     connect_delay:   float = 5.0
     connect_timeout: float = 30.0
     skip_failed:     bool  = True
+    connect_retries: int   = 3
+    retry_backoff:   float = 5.0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StartupCfg":
@@ -350,6 +355,42 @@ class StartupCfg:
             connect_delay=float(d.get("connect_delay", 5.0)),
             connect_timeout=float(d.get("connect_timeout", 30.0)),
             skip_failed=bool(d.get("skip_failed", True)),
+            connect_retries=int(d.get("connect_retries", 3)),
+            retry_backoff=float(d.get("retry_backoff", 5.0)),
+        )
+
+
+@dataclass(frozen=True)
+class ReconnectCfg:
+    """
+    Параметри фонового відновлення акаунтів, що впали в ERROR ПІСЛЯ
+    старту (тобто вже після того, як StartupManager вичерпав свої
+    connect_retries) — обробляє ReconnectWatchdog.
+
+    ERROR за задумом (див. src/core/status.py) означає "проблема, бот
+    намагається відновитись" — ReconnectWatchdog це і реалізує: акаунти
+    в DEAD (забанені) чи SUSPENDED (пауза адміном) не чіпає, бо там
+    потрібне зовнішнє втручання, а не ретрай.
+
+    app.yaml:
+        reconnect:
+          interval: 60.0             # як часто перевіряти чергу ERROR-акаунтів (сек)
+          base_backoff: 60.0         # пауза перед першою повторною спробою на акаунт
+          max_backoff: 900.0         # стеля backoff (15 хв) — щоб не спамити мертвий пароль
+          backoff_multiplier: 2.0
+    """
+    interval:           float = 60.0
+    base_backoff:        float = 60.0
+    max_backoff:          float = 900.0
+    backoff_multiplier:  float = 2.0
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ReconnectCfg":
+        return cls(
+            interval=float(d.get("interval", 60.0)),
+            base_backoff=float(d.get("base_backoff", 60.0)),
+            max_backoff=float(d.get("max_backoff", 900.0)),
+            backoff_multiplier=float(d.get("backoff_multiplier", 2.0)),
         )
  
 @dataclass(frozen=True)
@@ -374,13 +415,14 @@ class PersonalCfg:
     
 @dataclass(frozen=True)
 class AppConfig:
-    base_url: str
-    reader:   ReaderAppCfg
-    daily:    DailyCfg
-    quiz:     QuizCfg
-    mining:   MiningCfg
-    startup:  StartupCfg
-    personal: PersonalCfg
+    base_url:  str
+    reader:    ReaderAppCfg
+    daily:     DailyCfg
+    quiz:      QuizCfg
+    mining:    MiningCfg
+    startup:   StartupCfg
+    reconnect: ReconnectCfg
+    personal:  PersonalCfg
     
     @classmethod
     def from_dict(cls, raw_data: dict[str, Any]) -> "AppConfig":
@@ -391,6 +433,7 @@ class AppConfig:
             quiz=QuizCfg.from_dict(raw_data.get("quiz", {})),
             mining=MiningCfg.from_dict(raw_data.get("mining", {})),
             startup=StartupCfg.from_dict(raw_data.get("startup", {})),
+            reconnect=ReconnectCfg.from_dict(raw_data.get("reconnect", {})),
             personal=PersonalCfg.from_dict(raw_data.get("personal", {})),
         )
 

@@ -254,6 +254,72 @@ class SchedulerService:
             lambda: self._scheduler.connect_account(account_id)
         )
 
+    async def account_status(self, account_id: str) -> Optional[str]:
+        """
+        RPC-безпечна назва статусу акаунта (AccountStatus.name, напр. "ERROR",
+        "DEAD", "IDLE") або None, якщо акаунта немає. Використовується
+        ReconnectWatchdog-ом (щоб не тягнути живий Account через RPC).
+        """
+        return await self._run_on_home_loop(lambda: self._account_status_impl(account_id))
+
+    async def _account_status_impl(self, account_id: str) -> Optional[str]:
+        status = self._scheduler.status(account_id)
+        return status.name if status else None
+
+    async def reconnect_account(self, account_id: str) -> bool:
+        """
+        Повторна спроба підключення акаунта, що впав у ERROR — механізм,
+        яким користується ReconnectWatchdog (і яким можна скористатись
+        вручну, напр. з телеграм-бота, для миттєвого ретраю).
+
+        На відміну від голого connect_account(), після успіху довстановлює
+        професії, якщо вони ще не прикріплені: attach_profession()
+        ідемпотентний (AccountContainer.attach_profession — пропускає вже
+        зареєстровані), тож безпечно викликати повторно навіть якщо частина
+        професій вже була приєднана до падіння в ERROR.
+        """
+        return await self._run_on_home_loop(
+            lambda: self._reconnect_account_impl(account_id)
+        )
+
+    async def _reconnect_account_impl(self, account_id: str) -> bool:
+        scheduler = self._scheduler
+        if not scheduler.has_account(account_id):
+            return False
+
+        if not await scheduler.connect_account(account_id):
+            return False
+
+        professions = self._build_professions(account_id)
+        await scheduler.setup_professions(account_id, professions)
+        return True
+
+    async def problem_accounts(self) -> list[dict[str, Any]]:
+        """
+        RPC-безпечний список акаунтів, що потребують уваги: ERROR
+        (ReconnectWatchdog вже намагається сам, але варто знати, якщо це
+        затягнулось) і DEAD (забанені/непідключні — самі себе не
+        відновлять, потрібне ручне втручання). Використовується
+        telegram-service для періодичних алертів адмінам — і будь-яким
+        іншим монітором (напр. /health/accounts у rpc/server.py).
+        """
+        return await self._run_on_home_loop(lambda: self._problem_accounts_impl())
+
+    async def _problem_accounts_impl(self) -> list[dict[str, Any]]:
+        scheduler = self._scheduler
+        result: list[dict[str, Any]] = []
+        for account_id in scheduler.account_ids():
+            status = scheduler.status(account_id)
+            if status is None or status.name not in ("ERROR", "DEAD"):
+                continue
+            bot = scheduler.get_bot(account_id)
+            result.append({
+                "account_id": account_id,
+                "status": status.name,
+                "error": getattr(bot, "error", None),
+            })
+        return result
+
     async def disconnect_account(self, account_id: str) -> bool:
         """Закриває сесію акаунта без зупинки профессій."""
         return await self._run_on_home_loop(

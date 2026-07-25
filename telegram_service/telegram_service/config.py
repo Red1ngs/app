@@ -9,10 +9,15 @@ from dataclasses import dataclass
 
 @dataclass
 class TelegramBotConfig:
-    token:            str
-    admin_ids:        set[int]
-    core_service_url: str
+    token:              str
+    admin_ids:          set[int]
+    core_service_url:   str
     core_service_token: str
+    # Алерти про акаунти, що потребують уваги (ProblemAccountsNotifier,
+    # див. watchdog.py). Дефолти розумні для більшості випадків — env
+    # потрібен лише якщо треба підкрутити чутливість без ребілду образу.
+    problem_poll_interval:     float = 90.0
+    problem_error_alert_after: float = 300.0
 
     @classmethod
     def from_env(cls) -> "TelegramBotConfig":
@@ -33,4 +38,6 @@ class TelegramBotConfig:
             admin_ids=ids,
             core_service_url=core_url,
             core_service_token=core_token,
+            problem_poll_interval=float(os.environ.get("PROBLEM_POLL_INTERVAL", "90.0")),
+            problem_error_alert_after=float(os.environ.get("PROBLEM_ERROR_ALERT_AFTER", "300.0")),
         )
