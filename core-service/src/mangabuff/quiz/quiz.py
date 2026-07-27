@@ -135,6 +135,10 @@ class QuizProfession(BaseProfession):
         cfg = bot.app_config.quiz
         question = await bot.safe_session.quiz_start(cfg)
 
+        if not question.ok:
+            log.warning(f"⚠️ /quiz/start провалився: {question.reason}")
+            return RequestResult.deny_from_http(question, "quiz_start")
+
         data = question.data
         if data is None:
             log.warning("⚠️ /quiz/start не відповів")
@@ -196,6 +200,10 @@ class QuizProfession(BaseProfession):
 
         cfg = bot.app_config.quiz
         result = await bot.safe_session.quiz_answer(answer_text, cfg)
+
+        if not result.ok:
+            log.warning(f"⚠️ /quiz/answer провалився: {result.reason}")
+            return RequestResult.deny_from_http(result, "quiz_answer")
 
         if result.data is None:
             log.warning("⚠️ /quiz/answer не відповів")

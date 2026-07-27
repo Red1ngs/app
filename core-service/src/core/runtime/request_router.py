@@ -58,10 +58,10 @@ class RequestRouter:
                 timeout=ctx.timeout,
             )
         except asyncio.TimeoutError:
-            return RequestResult.deny("timeout")
+            return RequestResult.deny("timeout", transient=True)
         except Exception as e:
             log.error(f"[Router] {ctx.profession_id!r}: {e}", exc_info=True)
-            return RequestResult.deny(f"internal error: {e}")
+            return RequestResult.deny(f"internal error: {e}", transient=True)
 
         # Автозбереження інвентарю лише якщо approved — тільки тоді
         # profession реально змінила стан. Deny = нічого не змінилось.

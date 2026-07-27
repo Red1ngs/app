@@ -81,6 +81,7 @@ from src.core.monitoring.monitor import BaseMonitor
 
 if TYPE_CHECKING:
     from src.core.core_account import Account
+    from src.core.runtime.profession import RequestResult
     from src.core.runtime.scheduler import EventDrivenScheduler
 
 
@@ -96,7 +97,21 @@ class LoopingMonitor(BaseMonitor):
     для цього є _schedule_next() / _cancel_wakeup() / _stop_loop().
     Підклас відповідає лише за _run_cycle() (що робити) та, опційно,
     за _interval() (коли прокинутись наступного разу).
+
+    Планування після ask(): підклас НЕ зобов'язаний, але МАЄ (щоб коректно
+    переживати тимчасові проблеми сайту/проксі) планувати наступний цикл
+    через _schedule_after_result(result), а не голий _schedule_next(), коли
+    рішення "коли прокинутись" залежить від результату scheduler.ask().
+    Див. докстрінг _schedule_after_result нижче.
     """
+
+    # Короткий retry для ТИМЧАСОВИХ збоїв (result.transient=True — мережа/
+    # проксі/сайт тимчасово недоступні), замість повного _interval(), який
+    # у частини моніторів (reading — до 5400с) означав би втрату майже
+    # цілого циклу через 15-30с circuit-breaker cooldown на account-service.
+    _TRANSIENT_RETRY_BASE = 15.0    # перша повторна спроба — 15с
+    _TRANSIENT_RETRY_MULT = 2.0     # експоненційне зростання...
+    _TRANSIENT_RETRY_MAX  = 300.0   # ...але не довше 5 хвилин
 
     def __init__(self) -> None:
         self._account_id = ""
@@ -105,6 +120,11 @@ class LoopingMonitor(BaseMonitor):
         self._scheduler:    Optional["EventDrivenScheduler"] = None
         self._bot:          Optional["Account"]              = None
         self._log:          Optional["Logger"]               = None
+        # Лічильник ПОСПІЛЬ transient-збоїв — росте на кожному виклику
+        # _schedule_after_result() з result.transient=True, скидається на
+        # будь-якому не-transient результаті (успіх або реальна відмова).
+        # Формує експоненційний backoff у _next_transient_retry_delay().
+        self._transient_failures: int = 0
 
     # ── Хуки для підкласу ────────────────────────────────────────────────────
 
@@ -216,6 +236,54 @@ class LoopingMonitor(BaseMonitor):
             return
 
         self._wakeup_task = asyncio.ensure_future(self._sleep_and_run(delay))
+
+    async def _schedule_after_result(
+        self,
+        result: "RequestResult",
+        *,
+        normal_delay: Optional[float] = None,
+    ) -> None:
+        """
+        Планує наступний цикл ПІСЛЯ scheduler.ask(), враховуючи чи була
+        відмова тимчасовою проблемою сайту/проксі.
+
+        - result.approved=False і result.transient=True (мережевий таймаут,
+          circuit-breaker, 5xx — див. FailReason/is_transient) → короткий
+          retry з експоненційним backoff (_TRANSIENT_RETRY_BASE →
+          _TRANSIENT_RETRY_MAX), а НЕ повний _interval(). Інакше короткий
+          15-30с збій на account-service коштує монітору цілого пропущеного
+          циклу (для reading — до 5400с).
+        - будь-який інший результат (успіх, або реальна бізнес-відмова
+          типу LIMIT_EXHAUSTED/DENIED/AUTH) → backoff скидається, і
+          планування йде як звичайно: normal_delay, якщо передано, інакше
+          _interval() (стандартна поведінка _schedule_next(delay=None)).
+
+        Підклас лишається відповідальним за sleeping/_slot_limit_reached-
+        подібні guard'и — цей метод лише вирішує ЗАТРИМКУ, не факт виклику.
+        """
+        if not result.approved and result.transient:
+            delay = self._next_transient_retry_delay()
+            self.log.info(
+                f"[{type(self).__name__}] тимчасовий збій ({result.reason}) → "
+                f"повтор через {delay:.0f}с замість повного інтервалу"
+            )
+            await self._schedule_next(delay=delay)
+            return
+        self._reset_transient_backoff()
+        await self._schedule_next(delay=normal_delay)
+
+    def _next_transient_retry_delay(self) -> float:
+        """Наступна затримка в експоненційному backoff для transient-збоїв."""
+        delay = min(
+            self._TRANSIENT_RETRY_BASE * (self._TRANSIENT_RETRY_MULT ** self._transient_failures),
+            self._TRANSIENT_RETRY_MAX,
+        )
+        self._transient_failures += 1
+        return delay
+
+    def _reset_transient_backoff(self) -> None:
+        """Скидає лічильник transient-backoff — викликати на будь-якому не-transient результаті."""
+        self._transient_failures = 0
 
     async def _sleep_and_run(self, delay: float) -> None:
         """asyncio.sleep(delay) + _run_cycle() з єдиною точкою обробки помилок."""

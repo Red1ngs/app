@@ -207,7 +207,7 @@ class ReadingMonitor(LoopingMonitor):
         if not result.approved:
             self.log.warning(f"[ReadingMonitor] do_read відхилено: {result.reason}")
             if not self._sleeping and not self._slot_limit_reached:
-                await self._schedule_next()
+                await self._schedule_after_result(result)
             return
 
         data = result.data or {}
@@ -215,7 +215,7 @@ class ReadingMonitor(LoopingMonitor):
         # Якщо reward — ліміт перевірить _on_reward_received після ask("account_reward")
         if data.get("reward") or active_slot is None:
             if not self._sleeping and not self._slot_limit_reached:
-                await self._schedule_next()
+                await self._schedule_after_result(result)
             return
 
         # Без reward — перевіряємо ліміт по главах з result.data
@@ -244,7 +244,7 @@ class ReadingMonitor(LoopingMonitor):
                 return  # _on_slot_limit_reached вирішить що далі
 
         if not self._sleeping and not self._slot_limit_reached:
-            await self._schedule_next()
+            await self._schedule_after_result(result)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -344,7 +344,7 @@ class ReadingMonitor(LoopingMonitor):
         if not result.approved:
             self.log.warning(f"[ReadingMonitor] account_reward відхилено: {result.reason}")
             if not self._sleeping and not self._slot_limit_reached:
-                await self._schedule_next()
+                await self._schedule_after_result(result)
             return
 
         data       = result.data or {}
@@ -356,7 +356,7 @@ class ReadingMonitor(LoopingMonitor):
 
         if slot_name is None:
             if not self._sleeping and not self._slot_limit_reached:
-                await self._schedule_next()
+                await self._schedule_after_result(result)
             return
 
         # Перевіряємо ліміт по главах
@@ -388,7 +388,7 @@ class ReadingMonitor(LoopingMonitor):
             return
 
         if not self._sleeping and not self._slot_limit_reached:
-            await self._schedule_next()
+            await self._schedule_after_result(result)
             
     async def _on_chapters_marked(self, payload: dict[str, Any]) -> None:
         if payload.get("account_id") != self._account_id:

@@ -15,9 +15,9 @@ reader:
   reward_slots:
     - name:             "card"
       daily_limit:      10
-      interval_seconds: 5400
+      interval_seconds: 3600
       reward_keys:      ["id", "name", "image"]
-      max_chapters_per_slot: 20
+      max_chapters_per_slot: 30
 
     - name:             "scroll"
       daily_limit:      5

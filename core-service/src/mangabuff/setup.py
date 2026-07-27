@@ -31,7 +31,7 @@ from src.mangabuff.personal.inventory import PersonalInventory
 from src.mangabuff.manga_load.manga_loader import MangaLoaderProfession
 from src.mangabuff.reader.reader import ReaderProfession
 from src.mangabuff.daily.daily_monitor import DailyMonitor
-from src.mangabuff.daily.build import DailyProfession
+from src.mangabuff.daily.daily import DailyProfession
 from src.mangabuff.quiz.quiz import QuizProfession
 from src.mangabuff.mining.mining import MiningProfession
 

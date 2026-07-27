@@ -162,8 +162,8 @@ class ReaderProfession(BaseProfession):
         reward = await bot.safe_session.submit_add_history(items, last_manga, reader_cfg)
 
         if not reward.ok:
-            log.warning("📖 submit_add_history провалився")
-            return RequestResult.deny("submit_add_history failed")
+            log.warning(f"📖 submit_add_history провалився ({reward.reason})")
+            return RequestResult.deny_from_http(reward, "submit_add_history")
 
         reward_data = reward.data or {}
 
@@ -296,7 +296,7 @@ class ReaderProfession(BaseProfession):
             token, last_manga_read, reader_cfg
         )
         if not reward.ok:
-            return RequestResult.deny("claim_candy провалився")
+            return RequestResult.deny_from_http(reward, "claim_candy")
         return RequestResult.approve(data={"reward": reward.data})
 
     # ── get_state ─────────────────────────────────────────────────────────────

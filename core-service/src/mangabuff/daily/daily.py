@@ -99,6 +99,9 @@ class DailyProfession(BaseProfession):
         daily_cfg = bot.app_config.daily
         try:
             result = await bot.safe_session.fetch_daily_streak(daily_cfg)
+            if not result.ok:
+                log.warning(f"⚠️ fetch_daily_streak провалився: {result.reason}")
+                return RequestResult.deny_from_http(result, "fetch_daily_streak")
             return RequestResult.approve(data={"day": result.data})
         except Exception as e:
             log.error(f"❌ Помилка отримання дня стріку: {e}", exc_info=True)
@@ -111,7 +114,11 @@ class DailyProfession(BaseProfession):
         try:
             result = await bot.safe_session.claim_daily(daily_cfg, personal_cfg)
             self._stats.daily_results = result.data or {}
-            return RequestResult.approve(data={"ok": result.ok, "data": result.data or {}})
+            return RequestResult.approve(data={
+                "ok": result.ok, "data": result.data or {},
+                "reason": str(result.reason) if result.reason else None,
+                "transient": result.transient,
+            })
         except Exception as e:
             log.error(f"❌ Помилка під час збору звичайного бонусу: {e}", exc_info=True)
             return RequestResult.deny(str(e))
@@ -126,7 +133,11 @@ class DailyProfession(BaseProfession):
         try:
             result = await bot.safe_session.claim_calendar(day, daily_cfg)
             self._stats.calendar_results = result.data or {}
-            return RequestResult.approve(data={"ok": result.ok, "data": result.data or {}, "day": day})
+            return RequestResult.approve(data={
+                "ok": result.ok, "data": result.data or {}, "day": day,
+                "reason": str(result.reason) if result.reason else None,
+                "transient": result.transient,
+            })
         except Exception as e:
             log.error(f"❌ Помилка під час збору календарного бонусу: {e}", exc_info=True)
             return RequestResult.deny(str(e))

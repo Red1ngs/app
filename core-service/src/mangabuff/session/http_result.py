@@ -36,6 +36,34 @@ class FailReason(Enum):
                                # caller фіксує лічильник (напр. hits_left=0)
 
 
+# Причини, що означають "сайт/проксі тимчасово не відповідає", а НЕ
+# "сайт відповів і явно відмовив". Для них варто ретраїти СКОРО (секунди/
+# хвилини з backoff), а не чекати повний інтервал монітора (може бути
+# хвилини чи години) — інакше короткий 15-30с circuit-breaker cooldown на
+# account-service коштує читачу/шахтарю/квізу цілого пропущеного циклу.
+#
+# NETWORK  — account-service підняв ProxyUnavailableError/AccountAuthError/
+#            будь-який інший виняток під час запиту (http_call ловить це
+#            і мапить сюди) — типово: curl timeout, circuit-breaker OPEN,
+#            мертве проксі. Класична "сайт/проксі просів на кілька секунд".
+# SERVER   — сайт ВІДПОВІВ, але 5xx / неочікуваним статусом — теж ознака
+#            тимчасової нестабільності самого mangabuff.ru, а не бізнес-
+#            логічної відмови.
+#
+# AUTH навмисно НЕ тут: сесія вже прострочена назавжди, account-service
+# сам зробить re-login при наступному запиті — короткий retry тут нічого
+# не пришвидшить (re-login триває секунди, але не миттєво), а часте
+# бомбардування запитами під час re-login тільки шкодить. AUTH іде
+# нормальним інтервалом монітора, як і бізнес-відмови.
+_TRANSIENT_REASONS = frozenset({FailReason.NETWORK, FailReason.SERVER})
+
+
+def is_transient(reason: Optional["FailReason"]) -> bool:
+    """True, якщо `reason` — ознака тимчасової проблеми сайту/проксі
+    (варто ретраїти скоро), а не реальної бізнес-відмови чи staleness сесії."""
+    return reason in _TRANSIENT_REASONS
+
+
 @dataclass(frozen=True)
 class HttpResult(Generic[T]):
     ok:     bool
@@ -50,6 +78,11 @@ class HttpResult(Generic[T]):
 
     def __bool__(self) -> bool:
         return self.ok
+
+    @property
+    def transient(self) -> bool:
+        """True, якщо невдача — тимчасова проблема сайту/проксі (див. is_transient)."""
+        return not self.ok and is_transient(self.reason)
 
 
 # ── Конструктори ──────────────────────────────────────────────────────────────

@@ -190,6 +190,12 @@ class QuizMonitor(LoopingMonitor):
             )
             if not result.approved:
                 log.warning(f"[QuizMonitor] do_open відхилено: {result.reason}")
+                # Раніше тут був голий `return` — LoopingMonitor НЕ перепланує
+                # цикл сам, тож будь-яка відмова (навіть тимчасовий мережевий
+                # збій) назавжди зупиняла квіз до наступної зовнішньої події
+                # (daily.claimed/force_restart). Тепер плануємо ретрай:
+                # transient → короткий backoff, реальна відмова → answer_delay.
+                await self._schedule_after_result(result, normal_delay=self._get_answer_delay())
                 return
 
             # Затримка після відкриття сесії — перед першою відповіддю.
@@ -223,6 +229,9 @@ class QuizMonitor(LoopingMonitor):
 
             if not result.approved:
                 log.warning(f"[QuizMonitor] do_answer відхилено: {result.reason}")
+                # Той самий фікс, що й для do_open вище: без явного
+                # перепланування цикл просто зникав до наступної події.
+                await self._schedule_after_result(result, normal_delay=self._get_answer_delay())
                 break
 
             # Profession емітує quiz.limit_reached / quiz.session_ended →

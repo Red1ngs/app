@@ -97,7 +97,7 @@ class MiningProfession(BaseProfession):
 
         if not result.ok:
             log.warning(f"⚠️ /mine провалився: {result.reason}")
-            return RequestResult.deny(str(result.reason))
+            return RequestResult.deny_from_http(result, "mine")
 
         data = result.data
         if data is None:
@@ -137,7 +137,7 @@ class MiningProfession(BaseProfession):
                     data={"hits_left": 0},
                 )
             log.warning(f"⚠️ /mining провалився: {result.reason}")
-            return RequestResult.deny(str(result.reason))
+            return RequestResult.deny_from_http(result, "mine_hit")
 
         data = result.data
         if data is None:
@@ -162,7 +162,7 @@ class MiningProfession(BaseProfession):
 
         if not result.ok:
             log.warning(f"⚠️ /mine/upgrade провалився: {result.reason}")
-            raise ValueError(f"Помилка покращення кайлу: {result.reason}")
+            return RequestResult.deny_from_http(result, "upgrade_pickaxe")
             
         data = result.data
         if data is None:
@@ -186,7 +186,7 @@ class MiningProfession(BaseProfession):
 
         if not result.ok:
             log.warning(f"⚠️ /mine/buy-strong-hit провалився: {result.reason}")
-            raise ValueError(f"Помилка покупки сильного удару: {result.reason}")
+            return RequestResult.deny_from_http(result, "buy_strong_hit")
             
         data = result.data
         if data is None:
@@ -214,7 +214,7 @@ class MiningProfession(BaseProfession):
 
         if not result.ok:
             log.warning(f"⚠️ /mine/exchange провалився: {result.reason}")
-            raise ValueError(f"Помилка обміну руди на діаманти: {result.reason}")
+            return RequestResult.deny_from_http(result, "exchange_ore")
                 
         result_data = result.data
         if result_data is None:

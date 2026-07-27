@@ -156,18 +156,27 @@ class BaseProfession(ABC):
 class RequestResult:
     """
     Результат обробки запиту Profession-ою.
+
+    transient — True, якщо відмова спричинена ТИМЧАСОВОЮ проблемою сайту/
+    проксі (мережевий таймаут, circuit-breaker, 5xx), а НЕ реальною бізнес-
+    відмовою чи простроченою сесією. LoopingMonitor._schedule_after_result()
+    використовує це, щоб запланувати короткий retry з backoff замість
+    повного інтервалу циклу — інакше короткий 15-30с збій на account-service
+    коштує монітору цілого пропущеного циклу (могло бути хвилини чи години).
     """
 
     def __init__(
         self,
         *,
-        approved: bool,
-        reason:   str = "",
-        data:     Optional[dict[str, Any]] = None,
+        approved:  bool,
+        reason:    str = "",
+        data:      Optional[dict[str, Any]] = None,
+        transient: bool = False,
     ) -> None:
-        self.approved = approved
-        self.reason   = reason
-        self.data     = data or {}
+        self.approved  = approved
+        self.reason    = reason
+        self.data      = data or {}
+        self.transient = transient
 
     @classmethod
     def approve(
@@ -180,14 +189,42 @@ class RequestResult:
     @classmethod
     def deny(
         cls,
-        reason: str,
-        data:   Optional[dict[str, Any]] = None,
+        reason:    str,
+        data:      Optional[dict[str, Any]] = None,
+        transient: bool = False,
     ) -> "RequestResult":
         """Запит відхилено з поясненням."""
-        return cls(approved=False, reason=reason, data=data or {})
+        return cls(approved=False, reason=reason, data=data or {}, transient=transient)
+
+    @classmethod
+    def deny_from_http(
+        cls,
+        http_result: Any,
+        action: str,
+        data: Optional[dict[str, Any]] = None,
+    ) -> "RequestResult":
+        """
+        Будує deny() з невдалого HttpResult (src.mangabuff.session.http_result),
+        автоматично проставляючи transient за http_result.reason.
+
+        Приймається `Any` замість HttpResult[...] — щоб профессіям не
+        доводилось імпортувати generic-типізований HttpResult лише заради
+        анотації тут; насправді очікується об'єкт з .ok/.reason/.transient
+        (саме такий контракт у HttpResult).
+
+        Використання:
+            reward = await bot.safe_session.submit_add_history(...)
+            if not reward.ok:
+                return RequestResult.deny_from_http(reward, "submit_add_history")
+        """
+        reason_str = f"{action} failed" + (f": {http_result.reason}" if http_result.reason else "")
+        return cls(
+            approved=False, reason=reason_str, data=data or {},
+            transient=bool(getattr(http_result, "transient", False)),
+        )
 
     def __repr__(self) -> str:
-        status = "APPROVED" if self.approved else f"DENIED({self.reason!r})"
+        status = "APPROVED" if self.approved else f"DENIED({self.reason!r}, transient={self.transient})"
         return f"<RequestResult {status}>"
 
 

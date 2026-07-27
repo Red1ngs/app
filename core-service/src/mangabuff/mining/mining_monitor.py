@@ -216,27 +216,21 @@ class MiningMonitor(LoopingMonitor):
         
     async def _sale_ore(self) -> Optional[bool]:
         log = self.log
-        try:
-            bot = self.bot
-            inv = bot.inventory.mining
+        plan = self._get_purchase_plan()
 
-            plan = self._get_purchase_plan()
+        if plan is None:
+            return None
 
-            if plan is not None:
-                if not plan.has_enough:
-                    log.info(
-                        f"[MiningMonitor] Не вистачає руди на {plan.name}. "
-                        f"Потрібно мінімум: {plan.cost}, є: {inv.ore}"
-                    )
-                else:
-                    await self._execute_purchase(plan)
-            else:
-                log.info("[MiningMonitor] Всі завдання виконано, вільних алмазів для обміну немає.")
+        if not plan.has_enough:
+            log.info(
+                f"[MiningMonitor] → {plan.name}: не вистачає руди "
+                f"(потрібно {plan.cost}, є {int(self.bot.inventory.mining.ore)})"
+            )
+            return None
 
-            return getattr(inv, "needs_upgrade", False)
-        except ValueError as ex:
-           log.error(f"Помилка при обробці продажі руди: {ex}") 
-           return None
+        log.info(f"[MiningMonitor] → ask {plan.intent} ({plan.name}, cost={plan.cost})")
+        await self._execute_purchase(plan)
+        return True
 
     async def _execute_purchase(self, plan: PurchasePlan) -> None:
         """Викликає відповідний метод для здійснення покупки відповідно до плану."""
@@ -356,11 +350,11 @@ class MiningMonitor(LoopingMonitor):
         if not result.approved:
             log.warning(f"[MiningMonitor] mining_hit відхилено: {result.reason}")
             if not await self._mining_complete():
-                await self._schedule_next()
+                await self._schedule_after_result(result)
             return
 
         if not await self._mining_complete():
-            await self._schedule_next()
+            await self._schedule_after_result(result)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

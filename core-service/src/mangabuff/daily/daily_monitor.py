@@ -58,7 +58,13 @@ class DailyMonitor(LoopingMonitor):
 
     def __init__(self) -> None:
         super().__init__()
-        self._last_attempt_failed: bool                     = False
+        self._last_attempt_failed:    bool = False
+        # True, якщо остання невдача — мережева/проксі/сайт-проблема
+        # (FailReason.NETWORK/SERVER), а не реальна бізнес-відмова чи
+        # помилка парсингу. Впливає на _interval(): transient-невдача
+        # отримує короткий експоненційний backoff (15с→300с) замість
+        # завжди фіксованого _RETRY_COOLDOWN_S.
+        self._last_attempt_transient: bool = False
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -100,7 +106,14 @@ class DailyMonitor(LoopingMonitor):
         await self._run_claim_cycle()
 
     async def _interval(self) -> float:
-        return _RETRY_COOLDOWN_S if self._last_attempt_failed else -1.0
+        if not self._last_attempt_failed:
+            return -1.0
+        if self._last_attempt_transient:
+            return self._next_transient_retry_delay()
+        # Реальна бізнес-відмова (не мережа/проксі) — фіксований cooldown,
+        # як і раніше; тут швидший ретрай нічого не пришвидшить.
+        self._reset_transient_backoff()
+        return _RETRY_COOLDOWN_S
 
     # ── Визначення потреб ────────────────────────────────────────────────────
 
@@ -128,11 +141,13 @@ class DailyMonitor(LoopingMonitor):
             needs_daily, needs_calendar = self._determine_needs(last_daily_claimed, last_calendar_claimed)
 
             if not needs_daily and not needs_calendar:
-                self._last_attempt_failed = False
+                self._last_attempt_failed    = False
+                self._last_attempt_transient = False
                 await self._schedule_next()
                 return
 
             failed = False
+            self._last_attempt_transient = False
             daily_just_claimed = False
 
             if needs_calendar:
@@ -195,6 +210,7 @@ class DailyMonitor(LoopingMonitor):
         )
         if not res.approved:
             log.error(f"❌ Помилка отримання дня стріку: {res.reason}")
+            self._last_attempt_transient = self._last_attempt_transient or res.transient
             return True
 
         self._apply_streak_result(log, inv, res.data.get("day"))
@@ -224,9 +240,17 @@ class DailyMonitor(LoopingMonitor):
 
         if not res.approved:
             log.warning(f"⚠️ Не вдалося зібрати звичайний бонус: {res.reason}")
+            self._last_attempt_transient = self._last_attempt_transient or res.transient
             return True
 
+        self._note_transient_from_data(res.data)
         return self._apply_daily_result(log, inv, to_day, res.data)
+
+    def _note_transient_from_data(self, data: dict[str, Any]) -> None:
+        """data["transient"] проставляється в build.py з result.transient
+        (HttpResult) — тут лише піднімаємо його до self, бо _apply_*_result
+        лишаються @staticmethod (без доступу до self)."""
+        self._last_attempt_transient = self._last_attempt_transient or bool(data.get("transient"))
     
     @staticmethod
     def _apply_daily_result(log: "Logger", inv: "DailyInventory", to_day: str, data: dict[str, Any]) -> bool:
@@ -260,9 +284,18 @@ class DailyMonitor(LoopingMonitor):
 
         if not res.approved:
             log.warning(f"⚠️ Не вдалося зібрати календарний бонус: {res.reason}")
-            self._apply_calendar_failure(inv, to_day)
+            self._last_attempt_transient = self._last_attempt_transient or res.transient
+            if not res.transient:
+                # Реальна відмова (не мережа/проксі) — вважаємо "зробленим"
+                # на сьогодні, як і раніше.
+                self._apply_calendar_failure(inv, to_day)
+            # Transient: НЕ позначаємо як "зроблено" — інакше короткий
+            # мережевий збій назавжди ховає календарний бонус на весь день.
+            # Наступна спроба (короткий backoff, див. _interval()) сама
+            # перевірить needs_calendar заново.
             return True
 
+        self._note_transient_from_data(res.data)
         return await self._apply_calendar_result(log, bot, inv, to_day, day, res.data)
 
     async def _apply_calendar_result(
@@ -282,7 +315,8 @@ class DailyMonitor(LoopingMonitor):
             return False
 
         log.warning(f"⚠️ Не вдалося зібрати календарний бонус: {data.get('data')}")
-        self._apply_calendar_failure(inv, to_day)
+        if not data.get("transient"):
+            self._apply_calendar_failure(inv, to_day)
         return True
 
     @staticmethod
