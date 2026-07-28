@@ -123,24 +123,56 @@ async def main() -> None:
     startup_cfg = StartupConfig.from_app_config(app_cfg)
     svc = SchedulerService(repositories, app_cfg)
 
-    await restore_accounts(svc, startup_cfg, repositories.accounts)
-
-    # RPC-сервер — єдина точка входу ззовні (замінює колишній in-process
-    # admin-bot thread). telegram-service — типовий, але не єдиний можливий
-    # клієнт: будь-який інший сервіс так само може ходити сюди по HTTP.
+    # RPC-сервер піднімаємо ДО відновлення акаунтів, а не після. /health
+    # має відповідати 200 одразу, як тільки процес живий — незалежно від
+    # того, скільки акаунтів ще підключається. Раніше docker healthcheck
+    # (interval×retries ≈ 100s) стукав у порт, поки в ньому взагалі ніхто
+    # не слухав — і при великій кількості акаунтів (послідовний коннект
+    # у StartupManager, ~5s/акаунт + ретраї) контейнер йшов у unhealthy
+    # ще ДО того, як встигав стартувати HTTP. Реальний стан підключення
+    # акаунтів як і раніше доступний окремо через /health/accounts.
     rpc_app = create_rpc_app(svc)
     uv_config = uvicorn.Config(
         rpc_app, host=RPC_HOST, port=RPC_PORT, log_level="warning", lifespan="off",
     )
     uv_server = uvicorn.Server(uv_config)
     rpc_task = asyncio.create_task(uv_server.serve(), name="core-rpc")
+
+    # Чекаємо, поки uvicorn реально почне слухати порт (а не просто
+    # запустили таску), щоб healthcheck не ловив "connection refused"
+    # у перші мілісекунди після старту процесу.
+    while not uv_server.started:
+        await asyncio.sleep(0.05)
     log.info(f"RPC server listening on {RPC_HOST}:{RPC_PORT}")
+
+    # Відновлення акаунтів триває у фоні — не блокує готовність сервісу.
+    restore_task = asyncio.create_task(
+        restore_accounts(svc, startup_cfg, repositories.accounts),
+        name="restore-accounts",
+    )
+
+    def _log_restore_failure(task: "asyncio.Task[None]") -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error(f"[restore] Фонова задача впала: {exc}", exc_info=exc)
+
+    restore_task.add_done_callback(_log_restore_failure)
 
     try:
         while True:
             await asyncio.sleep(30)
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Shutdown requested...")
+
+        if not restore_task.done():
+            restore_task.cancel()
+            try:
+                await asyncio.wait_for(restore_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
         try:
             # Обмежуємо час на очищення ресурсів
             await asyncio.wait_for(scheduler.stop(), timeout=20.0)

@@ -102,8 +102,8 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8200/health').status==200 else 1)"]
       interval: 10s
-      timeout: 5s
-      retries: 10
+      timeout: 30s
+      retries: 20
 
   # ── Адмінський Telegram-бот ────────────────────────────────────────────────
   telegram-service:
