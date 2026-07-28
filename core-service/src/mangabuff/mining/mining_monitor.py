@@ -320,8 +320,15 @@ class MiningMonitor(LoopingMonitor):
             await self._start_mining()
             return
 
-        await self._sale_ore()
-        
+        sold = await self._sale_ore()
+        if sold:
+            log.info(
+                "[MiningMonitor] покупку/обмін здійснено → перезапускаємо "
+                "цикл через _start_mining"
+            )
+            await self._start_mining()
+            return
+
         if not self._daily_bonus_ready():
             log.info("[MiningMonitor] очікуємо збору денного бонусу (daily.claimed)")
             return

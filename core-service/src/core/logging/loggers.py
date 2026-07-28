@@ -17,6 +17,8 @@ import logging
 import logging.handlers
 from pathlib import Path
 
+from src.core.logging.setup import KyivFormatter
+
 _LOG_DIR      = Path("logs")
 _MAX_BYTES    = 10 * 1024 * 1024
 _BACKUP_COUNT = 5
@@ -48,7 +50,7 @@ def _attach(
         encoding="utf-8",
     )
     h.setLevel(level)
-    h.setFormatter(logging.Formatter(fmt, datefmt=_DATE_FMT))
+    h.setFormatter(KyivFormatter(fmt, datefmt=_DATE_FMT))
     logger.addHandler(h)
 
 
