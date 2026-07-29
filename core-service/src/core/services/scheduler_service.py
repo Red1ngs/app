@@ -57,6 +57,12 @@ class AccountInfo:
     professions:  list[str] = field(default_factory=list[str])
     monitors:     list[str] = field(default_factory=list[str])
     is_connected: bool = False
+    # Стан circuit breaker'а проксі на account-service: True, якщо
+    # CLOSED/HALF_OPEN (запити йдуть), False, якщо OPEN (fast-fail) або
+    # health взагалі недоступний. None, якщо акаунт не підключений і
+    # health не питали. Раніше ця інформація існувала лише всередині
+    # account-service і не була видима нізвідки, крім грепу логів.
+    circuit_healthy: Optional[bool] = None
 
     @property
     def profession(self) -> Optional[str]:
@@ -157,20 +163,41 @@ class SchedulerService:
             return None
 
         profs = scheduler.profession_names(acc_id)
-        auth = await container.bot.safe_session.account_client.get_status(acc_id)
+        is_connected = container.bot.is_connected
+
+        # Раніше тут був безумовний container.bot.safe_session..., що
+        # кидає RuntimeError, якщо акаунт не підключений (наприклад,
+        # проксі мертве чи авторизація не пройшла на старті). Через
+        # list comprehension у _snapshot_impl() ОДИН такий акаунт валив
+        # snapshot() ЦІЛКОМ — жоден акаунт не показувався, поки саме цей
+        # не полагодять (див. traceback [rpc] snapshot failed: [Asukaaa]
+        # Сесія не встановлена). Тепер для непідключених акаунтів просто
+        # не питаємо auth/health — показуємо доступну інфу з локального
+        # стану (email/proxy будуть "—", але сам акаунт лишається видимим
+        # у списку разом з error).
+        email = "—"
+        proxy = "—"
+        circuit_healthy: Optional[bool] = None
+        if is_connected:
+            try:
+                auth = await container.bot.safe_session.account_client.get_status(acc_id)
+                if auth:
+                    email = auth.email
+                    proxy = auth.proxy or "—"
+            except Exception as e:
+                log.warning(f"[{acc_id}] snapshot: не вдалося отримати auth-статус: {e}")
+
+            try:
+                health = await account_client.get_health(acc_id)
+                circuit_healthy = health.healthy
+            except Exception as e:
+                log.debug(f"[{acc_id}] snapshot: health недоступний: {e}")
 
         active_monitors = []
         
         am = container.monitors
         active_monitors = am.active_ids()
-        
-        if not auth:
-            email = "—"
-            proxy = "—"
-        else:
-            email = auth.email
-            proxy = auth.proxy
-        
+
         user_name = container.bot.inventory.personal.user_name or "—"
         user_id = container.bot.inventory.personal.user_id or "—"
         buff_info = MangabuffInfo(
@@ -179,15 +206,16 @@ class SchedulerService:
         )
         
         return AccountInfo(
-            account_id   = acc_id,
-            email        = email,
-            proxy        = proxy if proxy else "—",
-            status       = status.name,
-            mangabuff    = buff_info,
-            queue_size   = 0,
-            professions  = profs,
-            monitors     = active_monitors,
-            is_connected = container.bot.is_connected,
+            account_id       = acc_id,
+            email            = email,
+            proxy            = proxy if proxy else "—",
+            status           = status.name,
+            mangabuff        = buff_info,
+            queue_size       = 0,
+            professions      = profs,
+            monitors         = active_monitors,
+            is_connected     = is_connected,
+            circuit_healthy  = circuit_healthy,
         )
 
     async def account_ids(self) -> list[str]:

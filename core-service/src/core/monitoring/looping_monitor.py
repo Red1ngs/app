@@ -73,6 +73,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 import asyncio
+import random
 from logging import Logger
 from typing import TYPE_CHECKING, Optional
 
@@ -112,6 +113,19 @@ class LoopingMonitor(BaseMonitor):
     _TRANSIENT_RETRY_BASE = 15.0    # перша повторна спроба — 15с
     _TRANSIENT_RETRY_MULT = 2.0     # експоненційне зростання...
     _TRANSIENT_RETRY_MAX  = 300.0   # ...але не довше 5 хвилин
+
+    # Джиттер на "звичайний" (не-transient) інтервал циклу, коли delay
+    # береться з _interval() підкласу. Без нього багато акаунтів з
+    # однаковою конфігурацією (напр. reader.mode.slot.interval_seconds
+    # рівно 3600с) будять свої цикли рівно в одну й ту саму секунду
+    # щогодини — в логах це видно як кластер submit_add_history 500/503
+    # саме навколо початку години (04:59, 06:01, 07:02, 09:03 — це вже
+    # ефект зіткнення з якимось власним плановим вікном сайту, а не з
+    # нашими іншими акаунтами, але рівно такий самий механізм міг би й
+    # сам створювати "пачки" запитів при більшій кількості акаунтів).
+    # ±_INTERVAL_JITTER розсинхронізує пробудження без зміни очікуваного
+    # середнього інтервалу.
+    _INTERVAL_JITTER = 0.05  # ±5%
 
     def __init__(self) -> None:
         self._account_id = ""
@@ -229,13 +243,25 @@ class LoopingMonitor(BaseMonitor):
         if not self._loop_enabled:
             return
 
+        from_interval = delay is None
         if delay is None:
             delay = await self._interval()
 
         if delay < 0.0:
             return
 
+        # Джиттер лише для делеїв, що прийшли з _interval() (типовий
+        # "звичайний" цикл) — явно передані delay (0.0 для миттєвого
+        # пробудження на подію, чи вже пораховані backoff'и) лишаються
+        # рівно такими, як просив викликач.
+        if from_interval and delay > 0.0:
+            delay = self._apply_jitter(delay)
+
         self._wakeup_task = asyncio.ensure_future(self._sleep_and_run(delay))
+
+    def _apply_jitter(self, delay: float) -> float:
+        factor = 1.0 + random.uniform(-self._INTERVAL_JITTER, self._INTERVAL_JITTER)
+        return max(0.0, delay * factor)
 
     async def _schedule_after_result(
         self,

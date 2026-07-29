@@ -336,18 +336,22 @@ class StartupCfg:
 
     app.yaml:
         startup:
-          connect_delay: 5.0       # пауза між connect() двох акаунтів (сек)
+          connect_delay: 5.0       # стагер СТАРТУ між акаунтами в межах одного
+                                   # concurrency-слоту (сек) — див. concurrency
           connect_timeout: 30.0    # таймаут одного connect()
           skip_failed: true        # пропустити збійний акаунт, не зупиняти старт
           connect_retries: 3       # спроб connect() ОДНОГО акаунта перед тим, як
                                    # здатись і передати його ReconnectWatchdog-у
           retry_backoff: 5.0       # пауза між спробами connect() того самого акаунта
+          concurrency: 4           # скільки акаунтів конектити ОДНОЧАСНО (кожен —
+                                   # своє проксі, тож мережево незалежні)
     """
     connect_delay:   float = 5.0
     connect_timeout: float = 30.0
     skip_failed:     bool  = True
     connect_retries: int   = 3
     retry_backoff:   float = 5.0
+    concurrency:     int   = 4
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StartupCfg":
@@ -357,6 +361,7 @@ class StartupCfg:
             skip_failed=bool(d.get("skip_failed", True)),
             connect_retries=int(d.get("connect_retries", 3)),
             retry_backoff=float(d.get("retry_backoff", 5.0)),
+            concurrency=int(d.get("concurrency", 4)),
         )
 
 

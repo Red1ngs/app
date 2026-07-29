@@ -29,6 +29,16 @@ class StartupConfig:
     skip_failed:     bool  = True
     connect_retries: int   = 3
     retry_backoff:   float = 5.0
+    # Скільки акаунтів конектити ОДНОЧАСНО. Кожен акаунт ходить через
+    # СВОЄ проксі (окремий _ProxyWorker в account-service), тобто
+    # акаунти між собою мережево незалежні — попередня чисто послідовна
+    # реалізація (delay=5s + до 3 ретраїв × timeout на КОЖЕН акаунт)
+    # без потреби розтягувала старт великого парку акаунтів на
+    # 5-10+ хвилин, протягом яких уже підключені акаунти просто чекали
+    # своєї черги отримати монітори. concurrency=1 повертає стару чисто
+    # послідовну поведінку, якщо раптом потрібно (напр. дуже обмежений
+    # account-service чи спільний ресурс).
+    concurrency:     int   = 4
 
     @classmethod
     def from_app_config(cls, cfg) -> "StartupConfig":
@@ -41,6 +51,7 @@ class StartupConfig:
             skip_failed=getattr(s, "skip_failed", True),
             connect_retries=getattr(s, "connect_retries", 3),
             retry_backoff=getattr(s, "retry_backoff", 5.0),
+            concurrency=getattr(s, "concurrency", 4),
         )
 
 
@@ -76,23 +87,62 @@ class StartupManager:
             return
 
         total = len(self._queue)
+        concurrency = max(1, self._cfg.concurrency)
         log.info(
-            f"[StartupManager] Плавний запуск {total} акаунтів "
-            f"(затримка: {self._cfg.connect_delay}s)"
+            f"[StartupManager] Паралельний запуск {total} акаунтів "
+            f"(concurrency={concurrency}, стагер={self._cfg.connect_delay}s)"
         )
 
-        for idx, account_id in enumerate(self._queue):
-            if idx > 0:
-                await asyncio.sleep(self._cfg.connect_delay)
+        # Раніше акаунти конектились СТРОГО послідовно (delay між кожним
+        # + до 3 ретраїв на кожен), тобто час до "READY" зростав лінійно
+        # з кількістю акаунтів (для 7 акаунтів — реально 5-6+ хвилин, і
+        # весь цей час уже підключені акаунти просто чекали своєї черги
+        # отримати профессії/монітори). Кожен акаунт ходить через СВОЄ
+        # проксі (окремий _ProxyWorker на account-service), тому мережево
+        # вони одне одному не заважають — можна конектити їх паралельно,
+        # обмеживши лише кількість одночасних спроб (semaphore), щоб не
+        # створювати сплеск паралельних login-запитів до account-service.
+        #
+        # Легкий стагер (idx * connect_delay / concurrency) лишається —
+        # розводить МОМЕНТИ СТАРТУ навіть у межах однієї "хвилі" слотів,
+        # замість того щоб усі concurrency акаунтів стартували в один й
+        # той самий тік event loop'у.
+        semaphore = asyncio.Semaphore(concurrency)
+        order_lock = asyncio.Lock()
+        completed = 0
 
-            log.info(f"[StartupManager] [{idx + 1}/{total}] '{account_id}' …")
-            try:
-                await self._start_one(account_id)
-            except Exception as exc:
-                self._failed.append((account_id, str(exc)))
-                log.error(f"[StartupManager] ✗ '{account_id}': {exc}")
-                if not self._cfg.skip_failed:
-                    raise
+        async def _worker(idx: int, account_id: str) -> None:
+            nonlocal completed
+            stagger = self._cfg.connect_delay * idx / concurrency
+            if stagger > 0:
+                await asyncio.sleep(stagger)
+
+            async with semaphore:
+                async with order_lock:
+                    completed += 1
+                    pos = completed
+                log.info(f"[StartupManager] [{pos}/{total}] '{account_id}' …")
+                try:
+                    await self._start_one(account_id)
+                except Exception as exc:
+                    self._failed.append((account_id, str(exc)))
+                    log.error(f"[StartupManager] ✗ '{account_id}': {exc}")
+                    if not self._cfg.skip_failed:
+                        raise
+
+        tasks = [
+            asyncio.create_task(_worker(idx, account_id))
+            for idx, account_id in enumerate(self._queue)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # skip_failed=False: перше "справжнє" виключення (не з наших уже
+        # захоплених у _failed) прокидаємо назовні, як і стара поведінка
+        # з raise усередині циклу.
+        if not self._cfg.skip_failed:
+            for r in results:
+                if isinstance(r, Exception):
+                    raise r
 
         log.info(
             f"[StartupManager] READY — підключено: {len(self._ok)}/{total}"
