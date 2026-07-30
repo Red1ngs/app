@@ -169,6 +169,14 @@ class CoreServiceClient:
     async def remove(self, account_id: str) -> bool:
         return await self._rpc("remove", account_id)
 
+    async def update_email(self, account_id: str, email: str) -> tuple[bool, str]:
+        r = await self._rpc("update_account_data", account_id, email=email)
+        return tuple(r)  # type: ignore[return-value]
+
+    async def update_proxy(self, account_id: str, proxy: Optional[str]) -> tuple[bool, str]:
+        r = await self._rpc("update_account_data", account_id, proxy=proxy)
+        return tuple(r)  # type: ignore[return-value]
+
     # ── Professions ──────────────────────────────────────────────────────────
 
     async def add_profession(self, account_id: str, profession_name: str, *, priority: int = -1) -> tuple[bool, str]:

@@ -45,6 +45,7 @@ ALLOWED_METHODS: frozenset[str] = frozenset({
     "disconnect_account",
     "register_account",
     "add_account",
+    "update_account_data",
     "add_profession",
     "remove_profession",
     "set_professions",

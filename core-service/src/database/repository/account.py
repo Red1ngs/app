@@ -163,6 +163,14 @@ class AccountRepository:
             self._conn.commit()
             return profs
 
+    def delete(self, account_id: str) -> bool:
+        """Видаляє локальний рядок акаунта (id/email/professions). Повертає
+        True, якщо рядок дійсно існував."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
     def set_active(self, account_id: str, active: bool) -> None:
         with self._lock:
             self._conn.execute(

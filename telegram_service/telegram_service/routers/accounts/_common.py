@@ -150,6 +150,14 @@ def account_menu_kb(
                 callback_data=f"acc:pause:{acc_id}",
             )])
 
+    # ── Редагування облікових даних "на ходу" (email/проксі) — можна
+    # міняти в будь-якому стані, включно з підключеною сесією: account-
+    # service сам перепідключить її з новими даними.
+    rows.append([
+        InlineKeyboardButton(text="✉️ Email", callback_data=f"acc:edit_email:{acc_id}"),
+        InlineKeyboardButton(text="🌐 Проксі", callback_data=f"acc:edit_proxy:{acc_id}"),
+    ])
+
     # ── Управління професіями
     if not is_dead:
         rows.append([InlineKeyboardButton(
@@ -246,6 +254,12 @@ def confirm_remove_kb(acc_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Так, видалити", callback_data=f"acc:remove_confirm:{acc_id}"),
         InlineKeyboardButton(text="❌ Скасувати",     callback_data=f"acc:menu:{acc_id}"),
+    ]])
+
+
+def cancel_edit_kb(acc_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Скасувати", callback_data=f"acc:menu:{acc_id}"),
     ]])
 
 

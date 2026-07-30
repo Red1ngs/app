@@ -27,7 +27,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-from src.core.account_client import account_client, AccountServiceError
+from src.core.account_client import account_client, AccountServiceError, AccountNotFoundError
 from src.core.config.app import AppConfig
 from src.core.runtime.scheduler import EventDrivenScheduler
 from src.core.core_account import Account
@@ -451,6 +451,50 @@ class SchedulerService:
         await scheduler.setup_professions(account_id, self._build_professions(account_id))
         return True, ""
 
+    async def update_account_data(
+        self,
+        account_id: str,
+        email: Optional[str] = ...,
+        proxy: Optional[str] = ...,
+    ) -> tuple[bool, str]:
+        """
+        Вільна зміна email/проксі "на ходу" — без ручного
+        disconnect/patch/connect на боці викликача: account-service сам
+        перепідключить живу сесію, якщо proxy справді змінюється (email
+        сесії не стосується, для нього перепідключення не потрібне).
+
+        Аргумент, який не треба чіпати, просто не передається (RPC-шар
+        кладе в kwargs лише те, що явно попросив викликач) — тоді тут
+        лишається дефолт `...` і ми його ігноруємо. proxy=None прибирає
+        проксі (працювати напряму, без нього); email=None недопустимий.
+        """
+        if email is ... and proxy is ...:
+            return False, "Не передано жодного поля для зміни"
+
+        kw: dict[str, Any] = {}
+        if email is not ...:
+            if not email:
+                return False, "email не може бути порожнім"
+            kw["email"] = email
+        if proxy is not ...:
+            kw["proxy"] = proxy
+
+        try:
+            await self._run_on_home_loop(lambda: account_client.update_account(account_id, **kw))
+        except AccountServiceError as e:
+            return False, f"account-service: {e}"
+
+        if email is not ... and email:
+            # Локальна копія email (лише для власного обліку/логів —
+            # джерело правди лишається на account-service, див. коментар
+            # на початку файлу).
+            try:
+                self._repo.accounts.upsert(account_id, email, professions=None)
+            except ValueError as e:
+                return False, str(e)
+
+        return True, ""
+
     # ── Управління professions ────────────────────────────────────────────────
 
     async def add_profession(
@@ -557,11 +601,48 @@ class SchedulerService:
     # ── Видалення акаунта ─────────────────────────────────────────────────────
 
     async def remove(self, account_id: str) -> bool:
-        # Знімає акаунт з live-scheduler'а (сесія, професії, монітори).
-        # Секретів локально більше немає що стирати — ні в .env, ні в БД:
-        # облік на account-service свідомо лишається (там власна історія
-        # сесій; видалення звідти — окрема дія, поза цим методом).
-        return await self._run_on_home_loop(lambda: self._scheduler.remove_account(account_id))
+        """
+        ЄДИНА точка повного видалення акаунта. Викликається виключно з
+        telegram-service (адмін підтвердив видалення) — жоден інший сервіс
+        сам видалення не ініціює.
+
+        Прибирає акаунт УСЮДИ, а не лише з живого scheduler'а:
+          1) знімає з live-scheduler'а (сесія, професії, монітори) —
+             попутно DayAnnouncerService.unbind() сам відпише акаунт від
+             day-service (fire-and-forget day_client.unregister());
+          2) видаляє облікові дані (email/пароль/проксі/сесія) на
+             account-service — раніше це свідомо не робилось, і акаунти
+             назавжди лишались висіти там навіть після видалення тут;
+          3) видаляє локальний рядок (id/email/professions) із власної БД
+             core-service.
+
+        Крок 2 — best-effort: якщо account-service тимчасово недоступний,
+        локальне видалення (1, 3) все одно доводиться до кінця, а не
+        зависає в невизначеному стані; помилка лише логується.
+        """
+        # Кожен крок виконується незалежно від успіху попередніх: акаунт
+        # може існувати в live-scheduler'і, але вже бути видаленим на
+        # account-service (чи навпаки) — часткова неузгодженість якраз і є
+        # тим станом, який ця функція покликана виправляти, тож не
+        # виходимо раніше часу.
+        was_live = await self._run_on_home_loop(lambda: self._scheduler.remove_account(account_id))
+
+        account_service_deleted = False
+        try:
+            await self._run_on_home_loop(lambda: account_client.delete_account(account_id))
+            account_service_deleted = True
+        except AccountNotFoundError:
+            pass  # вже видалено раніше — не помилка
+        except AccountServiceError as e:
+            log.warning(f"[{account_id}] не вдалось видалити на account-service: {e}")
+
+        try:
+            local_row_deleted = self._repo.accounts.delete(account_id)
+        except Exception as e:
+            log.warning(f"[{account_id}] не вдалось видалити локальний рядок: {e}")
+            local_row_deleted = False
+
+        return was_live or account_service_deleted or local_row_deleted
 
     # ── Async операції ────────────────────────────────────────────────────────
 
